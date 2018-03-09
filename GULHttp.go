@@ -23,6 +23,7 @@ import (
 	"io"
 	_"net/http/pprof"
 	_"runtime/pprof"
+	"errors"
 )
 
 type udpData struct {
@@ -32,11 +33,34 @@ type udpData struct {
 type UserItem struct {
 	UserID int64
 	EnterTime int64
+	MgrRole int16
+	StarLevel int16
+	NobleLevel int16
+}
+
+var ErrNilUserItem = errors.New("qiqi_rlrs.MsgUserItem can't be nil.")
+func NewUserItem(userItem *qiqi_rlrs.MsgUserItem) (item *UserItem, err error) {
+	if userItem == nil {
+		return nil, ErrNilUserItem
+	}
+	return &UserItem{
+		userItem.GetInt64Userid(),
+		userItem.GetInt64EnterTime(),
+		int16(userItem.GetInt32ManagerRole()),
+		int16(userItem.GetInt32StarLevel()),
+		int16(userItem.GetInt32NobleLevel()),
+		}, nil
 }
 
 type UserList struct {
 	RoomID int64
+	Total int32
 	UserArray []*UserItem
+}
+
+type UserInfo struct {
+	RoomID int64
+	UserItem *UserItem
 }
 
 var (
@@ -129,7 +153,6 @@ func main() {
 	go handleUDPClient(g_udp_conn)
 
 	g_log.Println("start server...")
-
 	go func() {
 		var lastReqNum, lastRspNum  int64
 		var lastTimeoutNum int64
@@ -171,6 +194,7 @@ func main() {
 	}
 
 	http.HandleFunc("/getUserList", userListHandler)
+	http.HandleFunc("/queryUserInfo", queryUserInfoHandler)
 	err = httpSrv.ListenAndServe()
 	if err != nil {
 		g_log.Println("http server error: ", err)
@@ -211,6 +235,18 @@ func loadWhiteList(cfg *config.Config) {
 	}
 }
 
+func checkIPLicence(ip string) bool {
+	netHost := netframe.StringIpToNetInt(ip)
+	var bExist bool = false
+	for _, v := range g_white_list {
+		if v == netHost {
+			bExist = true
+			break
+		}
+	}
+	return bExist
+}
+
 func userListHandler(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		atomic.AddInt64(&g_http_conc_num, -1)
@@ -222,15 +258,7 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 	strHost, strPort, _ := net.SplitHostPort(r.RemoteAddr)
 	_ = strPort
 	//g_log.Println("host: ", strHost, " :port: ", strPort)
-	netHost := netframe.StringIpToNetInt(strHost)
-	var bExist bool = false
-	for _, v := range g_white_list {
-		if v == netHost {
-			bExist = true
-			break
-		}
-	}
-	if !bExist {
+	if false == checkIPLicence(strHost) {
 		w.WriteHeader(401)
 		return
 	}
@@ -240,10 +268,12 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 	strRoomId := r.Form.Get("roomid")
 	strLastUserID := r.Form.Get("lastuserid")
 	strRobot := r.Form.Get("rb")
+	strAmount := r.Form.Get("amount")
 	//g_log.Println("roomid:", strRoomId, ", userid:", strLastUserID, " :rb: ", strRobot)
 	rid, err := strconv.ParseInt(strRoomId, 10, 64)
 	uid, err := strconv.ParseInt(strLastUserID, 10, 64)
 	rb, err := strconv.Atoi(strRobot)
+	amount, err := strconv.Atoi(strAmount)
 
 	atomic.AddUint64(&g_session_id, 1)
 	sid := atomic.LoadUint64(&g_session_id)
@@ -259,13 +289,14 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 	int32Rb := int32(rb)
 
 	getUL := func (lastUid int64) {
-		reqUserList := &qiqi_rlrs.ReqGetRoomUserList{}
-		reqUserList.Uint32Cmd = &cmd
-		reqUserList.Uint64Jobid = &sid
-		reqUserList.Int64Roomid = &rid
-		reqUserList.Int64LastUserid = &lastUid
-		reqUserList.Int32Robot = &int32Rb
-		reqBuf, err := proto.Marshal(reqUserList)
+		reqRlrsMsg := &qiqi_rlrs.ReqRlrsMsg{}
+		reqRlrsMsg.Uint32Cmd = &cmd
+		reqRlrsMsg.Uint64Jobid = &sid
+		reqRlrsMsg.Int64Roomid = &rid
+		reqRlrsMsg.OGetUserList = &qiqi_rlrs.ReqGetRoomUserList{}
+		reqRlrsMsg.OGetUserList.Int64LastUserid = &lastUid
+		reqRlrsMsg.OGetUserList.Int32Robot = &int32Rb
+		reqBuf, err := proto.Marshal(reqRlrsMsg)
 		if err != nil {
 			g_log.Println("pb pack error: ", err)
 			return
@@ -294,8 +325,8 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 				}
 
 				atomic.AddInt64(&g_total_recv_chan_num, 1)
-				rspUserList := &qiqi_rlrs.RspGetRoomUserList{}
-				err = proto.Unmarshal(uData.data, rspUserList)
+				rspRlrsMsg := &qiqi_rlrs.RspRlrsMsg{}
+				err = proto.Unmarshal(uData.data, rspRlrsMsg)
 				if err != nil {
 					g_log.Println("http pb parse failed: sid = ", sid, ", error: ", err)
 					w.WriteHeader(500)
@@ -304,18 +335,27 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 				}
 
 				//存储数据
-				ulData := rspUserList.GetOUserList()
+				reqUserList := rspRlrsMsg.GetOGetUserList()
+				ulData := reqUserList.GetOUserList()
 				if len(ulData) > 0 {
 					for i := 0; i < len(ulData); i++ {
-						userItem := &UserItem{ulData[i].GetInt64Userid(), ulData[i].GetInt64EnterTime()}
-						userArray = append(userArray, userItem)
+						userItem, err := NewUserItem(ulData[i])
+						if err == nil {
+							userArray = append(userArray, userItem)
+						}
 					}
 				}
 
 				//结束
-				if 0 == rspUserList.GetInt64LastUserid() {
+				if 0 == reqUserList.GetInt64LastUserid() ||
+					(amount > 0 && len(userArray) >= amount) {
 					atomic.AddInt64(&g_total_rsp_num, 1)
-					userList := UserList{rspUserList.GetInt64Roomid(), userArray}
+					var userList UserList
+					if (amount > 0 && len(userArray) >= amount) {
+						userList = UserList{rspRlrsMsg.GetInt64Roomid(), reqUserList.GetInt32Total(), userArray[:amount]}
+					} else {
+						userList = UserList{rspRlrsMsg.GetInt64Roomid(), reqUserList.GetInt32Total(), userArray}
+					}
 					js, err := json.Marshal(userList)
 					if err != nil {
 						w.WriteHeader(500)
@@ -328,7 +368,7 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 				}
 
 				//取下一组
-				uid = rspUserList.GetInt64LastUserid()
+				uid = reqUserList.GetInt64LastUserid()
 				getUL(uid)
 			}
 
@@ -344,7 +384,128 @@ func userListHandler(w http.ResponseWriter, r *http.Request) {
 
 	useTime := (time.Now().UnixNano() - startTime) / int64(time.Millisecond)
 	_ = useTime
-	//g_log.Println("http end sid = ", sid, ", use time:", useTime)
+	//g_log.Println("getUserList http end sid = ", sid, ", use time:", useTime)
+}
+
+func queryUserInfoHandler(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		atomic.AddInt64(&g_http_conc_num, -1)
+	}()
+
+	startTime := time.Now().UnixNano()
+	atomic.AddInt64(&g_http_conc_num, 1)
+
+	strHost, strPort, _ := net.SplitHostPort(r.RemoteAddr)
+	_ = strPort
+	//g_log.Println("host: ", strHost, " :port: ", strPort)
+	if false == checkIPLicence(strHost) {
+		w.WriteHeader(401)
+		return
+	}
+
+	atomic.AddInt64(&g_total_req_num, 1)
+	r.ParseForm()
+	strRoomId := r.Form.Get("roomid")
+	strUserID := r.Form.Get("userid")
+	//g_log.Println("roomid:", strRoomId, ", userid:", strUserID)
+	rid, err := strconv.ParseInt(strRoomId, 10, 64)
+	uid, err := strconv.ParseInt(strUserID, 10, 64)
+
+	atomic.AddUint64(&g_session_id, 1)
+	sid := atomic.LoadUint64(&g_session_id)
+	udpChan := make(chan *udpData, 10)
+	g_chan_map[sid%100].Store(sid, udpChan)
+
+	defer func() {
+		g_chan_map[sid%100].Delete(sid)
+		//g_log.Println("delete sid = ", sid)
+	}()
+
+	cmd := uint32(qiqi_rlrs.ENUM_RLRS_CMD_enum_rlrs_query_room_user_info)
+
+	func() {
+		reqRlrsMsg := &qiqi_rlrs.ReqRlrsMsg{}
+		reqRlrsMsg.Uint32Cmd = &cmd
+		reqRlrsMsg.Uint64Jobid = &sid
+		reqRlrsMsg.Int64Roomid = &rid
+		reqRlrsMsg.OQueryUserInfo = &qiqi_rlrs.ReqQueryRoomUserInfo{}
+		reqRlrsMsg.OQueryUserInfo.Int64Userid = &uid
+		reqBuf, err := proto.Marshal(reqRlrsMsg)
+		if err != nil {
+			g_log.Println("pb pack error: ", err)
+			return
+		}
+
+		n, err := g_udp_conn.WriteToUDP(reqBuf, g_udp_addr)
+		_ = n
+		//g_log.Println("write udp data: ", n, ", err:", err, "addr:", g_udp_addr)
+		if err != nil {
+			log.Println("write udp data error: ", err)
+		} else {
+			atomic.AddInt64(&g_total_udp_req_num, 1)
+		}
+	}()
+
+LoopFor:
+	for {
+		select {
+		case uData, ok := <-udpChan:
+			{
+				if !ok {
+					g_log.Println("chan close: sid = ", sid)
+					break LoopFor
+				}
+
+				atomic.AddInt64(&g_total_recv_chan_num, 1)
+				rspRlrsMsg := &qiqi_rlrs.RspRlrsMsg{}
+				err = proto.Unmarshal(uData.data, rspRlrsMsg)
+				if err != nil {
+					g_log.Println("http pb parse failed: sid = ", sid, ", error: ", err)
+					w.WriteHeader(500)
+
+					break LoopFor
+				}
+
+				//存储数据
+				var userInfo UserInfo
+				reqUserInfo := rspRlrsMsg.GetOQueryUserInfo()
+				if reqUserInfo != nil {
+					ulData := reqUserInfo.GetOUserItem()
+					userItem, err := NewUserItem(ulData)
+					if err == nil {
+						userInfo = UserInfo{RoomID: rspRlrsMsg.GetInt64Roomid(), UserItem: userItem}
+					}
+				} else {
+					userInfo = UserInfo{RoomID: rspRlrsMsg.GetInt64Roomid()}
+				}
+
+				atomic.AddInt64(&g_total_rsp_num, 1)
+
+				js, err := json.Marshal(userInfo)
+				if err != nil {
+					w.WriteHeader(500)
+					g_log.Println("http json err: ", err)
+				} else {
+					fmt.Fprintf(w, "%v", string(js))
+				}
+
+				break LoopFor
+			}
+
+		case <-time.After(time.Second * 60):
+			{
+				atomic.AddInt64(&g_total_timeout_num, 1)
+				g_log.Println("http timeout: sid = ", sid)
+				w.WriteHeader(500)
+
+				break LoopFor
+			}
+		}
+
+		useTime := (time.Now().UnixNano() - startTime) / int64(time.Millisecond)
+		_ = useTime
+		//g_log.Println("queryUserInfo http end sid = ", sid, ", use time:", useTime)
+	}
 }
 
 func handleUDPClient(conn *net.UDPConn) {
@@ -352,7 +513,7 @@ func handleUDPClient(conn *net.UDPConn) {
 
 	data := make([]byte, 2048)
 	for {
-		n, remoteAddr, err := conn.ReadFromUDP(data)
+		n, remoteAddr, err := conn.ReadFromUDP(data[0:])
 		_ = remoteAddr
 		if err != nil {
 			g_log.Println("udp recv error: ", err)
@@ -368,14 +529,14 @@ func handleUDPClient(conn *net.UDPConn) {
 		atomic.AddInt64(&g_total_udp_rsp_num, 1)
 		//g_log.Println("recv udp data: ", n, " addr:", remoteAddr)
 
-		rspUserList := &qiqi_rlrs.RspGetRoomUserList{}
-		err = proto.Unmarshal(data[:n], rspUserList)
+		rspRlrsMsg := &qiqi_rlrs.RspRlrsMsg{}
+		err = proto.Unmarshal(data[:n], rspRlrsMsg)
 		if err != nil {
 			g_log.Println("pb parse error: ", err, ", recv udp data size: ", n)
 			continue
 		}
 
-		sid := rspUserList.GetUint64Jobid()
+		sid := rspRlrsMsg.GetUint64Jobid()
 		udpChan, ok := g_chan_map[sid%100].Load(sid)
 		//g_log.Println("chan:", udpChan, " : ", ok)
 		if !ok {
@@ -397,11 +558,5 @@ func handleUDPClient(conn *net.UDPConn) {
 		uc <- udpPack
 		//g_log.Println("send chan data")
 		atomic.AddInt64(&g_total_send_chan_num, 1)
-
-		//结束
-		if 0 == rspUserList.GetInt64LastUserid() {
-			//close(uc)
-			//g_log.Println("roomid:", rspUserList.GetInt64Roomid(), " end")
-		}
 	}
 }

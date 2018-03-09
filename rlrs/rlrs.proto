@@ -1,0 +1,67 @@
+package qiqi.rlrs;
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//包命令定义
+enum ENUM_RLRS_CMD
+{
+    enum_rlrs_get_room_user_list = 0x1;                 //获取房间用户列表
+    enum_rlrs_query_room_user_info = 0x02;              //查询指定用户信息
+}
+
+//用户数据项
+message msg_user_item
+{
+    optional int64 int64_userid = 1;
+    optional int64 int64_enter_time = 2;
+    optional int32 int32_manager_role = 3;
+    optional int32 int32_star_level = 4;
+    optional int32 int32_noble_level = 5;
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------
+//获取房间用户列表请求
+message req_get_room_user_list
+{
+    optional int64   int64_last_userid = 1;             //最后的用户ID
+    optional int32   int32_robot = 2;                   //是否带机器人
+}
+
+//获取房间用户列表应答
+message rsp_get_room_user_list
+{
+   optional int32   int32_total = 1;                    //房间总人数
+   optional int64   int64_last_userid = 2;             //最后的用户ID，为0则表示取完了
+   repeated msg_user_item   o_user_list = 3;           //用户列表
+}
+
+//查询房间指定用户信息请求
+message req_query_room_user_info
+{
+    optional int64   int64_userid = 1;                  //用户ID
+}
+
+//查询房间指定用户信息应答
+message rsp_query_room_user_info
+{
+   optional msg_user_item   o_user_item = 1;           //用户信息
+}
+
+//请求消息
+message req_rlrs_msg
+{
+    optional uint32  uint32_cmd = 1;                            //命令,ENUM_RLRS_CMD
+    optional uint64  uint64_jobid = 2;                          //需要带回的值
+    optional int64   int64_roomid = 3;                          //房间ID
+    optional req_get_room_user_list o_get_user_list = 4;        //获取用户列表
+    optional req_query_room_user_info o_query_user_info = 5;    //查询用户信息
+}
+
+//应答消息
+message rsp_rlrs_msg
+{
+    optional uint32  uint32_cmd = 1;                            //命令,ENUM_RLRS_CMD
+    optional uint64  uint64_jobid = 2;                          //需要带回的值
+    optional int64   int64_roomid = 3;                          //房间ID
+    optional rsp_get_room_user_list o_get_user_list = 4;        //获取用户列表
+    optional rsp_query_room_user_info o_query_user_info = 5;    //查询用户信息
+}
