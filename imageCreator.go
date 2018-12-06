@@ -177,6 +177,7 @@ func main() {
 	if err != nil {
 		return
 	}
+	defer os.RemoveAll(fileFolder)
 
 	var dockerFilePath = fileFolder + "/" + "Dockerfile"
 	err = genDockerfile(dockerFilePath, progName)
@@ -212,6 +213,5 @@ func main() {
 		}
 	}
 
-	os.RemoveAll(fileFolder)
 	fmt.Println("docker image build finish")
 }
