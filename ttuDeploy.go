@@ -194,28 +194,28 @@ func checkDocker() error {
 
 	set_daemon_json_file(){
 		DOCKER_DAEMON_JSON_FILE="/etc/docker/daemon.json"
-		if sudo test -f ${DOCKER_DAEMON_JSON_FILE}
+		if test -f ${DOCKER_DAEMON_JSON_FILE}
 		then
-			sudo cp  ${DOCKER_DAEMON_JSON_FILE} "${DOCKER_DAEMON_JSON_FILE}.bak"
-			if sudo grep -q registry-mirrors "${DOCKER_DAEMON_JSON_FILE}.bak";then
-				sudo cat "${DOCKER_DAEMON_JSON_FILE}.bak" | sed -n "1h;1"'!'"H;\${g;s|\"registry-mirrors\":\s*\[[^]]*\]|\"registry-mirrors\": [\"${MIRROR_URL}\"]|g;p;}" | sudo tee ${DOCKER_DAEMON_JSON_FILE}
+			cp  ${DOCKER_DAEMON_JSON_FILE} "${DOCKER_DAEMON_JSON_FILE}.bak"
+			if grep -q registry-mirrors "${DOCKER_DAEMON_JSON_FILE}.bak";then
+				cat "${DOCKER_DAEMON_JSON_FILE}.bak" | sed -n "1h;1"'!'"H;\${g;s|\"registry-mirrors\":\s*\[[^]]*\]|\"registry-mirrors\": [\"${MIRROR_URL}\"]|g;p;}" | tee ${DOCKER_DAEMON_JSON_FILE}
 			else
-				sudo cat "${DOCKER_DAEMON_JSON_FILE}.bak" | sed -n "s|{|{\"registry-mirrors\": [\"${MIRROR_URL}\"],|g;p;" | sudo tee ${DOCKER_DAEMON_JSON_FILE}
+				cat "${DOCKER_DAEMON_JSON_FILE}.bak" | sed -n "s|{|{\"registry-mirrors\": [\"${MIRROR_URL}\"],|g;p;" | tee ${DOCKER_DAEMON_JSON_FILE}
 			fi
 		else
-			sudo mkdir -p "/etc/docker"
-			sudo echo "{\"registry-mirrors\": [\"${MIRROR_URL}\"]}" | sudo tee ${DOCKER_DAEMON_JSON_FILE}
+			mkdir -p "/etc/docker"
+			echo "{\"registry-mirrors\": [\"${MIRROR_URL}\"]}" | tee ${DOCKER_DAEMON_JSON_FILE}
 		fi
 	}
 
 	set_daemon_json_file
-	sudo systemctl restart docker
+	systemctl restart docker
 `
 
 	cmd := exec.Command("/bin/bash", "-c", "docker -v | awk '{print $3}'")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Println("请检测docker是否安装0x0001: ", err.Error())
+		fmt.Printf("请检测docker是否安装0x0001: %s(%s)\n", string(out), err.Error())
 		return err
 	}
 	fmt.Println("Docker Version: ", string(out))
@@ -223,7 +223,7 @@ func checkDocker() error {
 	cmd = exec.Command("/bin/bash", "-c", shellCmdStr)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		fmt.Println("请检测docker是否安装0x0002: ", err.Error())
+		fmt.Printf("请检测docker是否安装0x0002: %s(%s)\n", string(out), err.Error())
 		return err
 	}
 	fmt.Println(string(out))
@@ -235,15 +235,15 @@ func checkNetBridge() error {
 	shellCmdStr := `
 	set_bridge() {
 		NET_BRIDGE_CONF_FILE="/etc/sysctl.conf"
-		if sudo test -f ${NET_BRIDGE_CONF_FILE}
+		if test -f ${NET_BRIDGE_CONF_FILE}
 		then
-			sudo cp  ${NET_BRIDGE_CONF_FILE} "${NET_BRIDGE_CONF_FILE}.bak"
-			if sudo grep -q net.bridge.bridge-nf-call-ip6tables "${NET_BRIDGE_CONF_FILE}.bak";then
+			cp  ${NET_BRIDGE_CONF_FILE} "${NET_BRIDGE_CONF_FILE}.bak"
+			if grep -q net.bridge.bridge-nf-call-ip6tables "${NET_BRIDGE_CONF_FILE}.bak";then
 				sed -i 's/net.bridge.bridge-nf-call-ip6tables = 0/net.bridge.bridge-nf-call-ip6tables = 1/g' /etc/sysctl.conf
 			else
 				sed -i '$a net.bridge.bridge-nf-call-ip6tables = 1' /etc/sysctl.conf
 			fi
-				if sudo grep -q net.bridge.bridge-nf-call-iptables "${NET_BRIDGE_CONF_FILE}.bak";then
+				if grep -q net.bridge.bridge-nf-call-iptables "${NET_BRIDGE_CONF_FILE}.bak";then
 					sed -i 's/net.bridge.bridge-nf-call-iptables = 0/net.bridge.bridge-nf-call-iptables = 1/g' /etc/sysctl.conf
 			else
 				sed -i '$a net.bridge.bridge-nf-call-iptables = 1' /etc/sysctl.conf
@@ -259,7 +259,7 @@ func checkNetBridge() error {
 	cmd := exec.Command("/bin/bash", "-c", shellCmdStr)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Println("网络配置错误0x0001: ", err.Error())
+		fmt.Printf("网络配置错误0x0001: %s(%s)\n", string(out), err.Error())
 		return err
 	}
 	//fmt.Println(string(out))
@@ -267,7 +267,7 @@ func checkNetBridge() error {
 	cmd = exec.Command("/bin/bash", "-c", "sysctl -p")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		fmt.Println("网络配置错误0x0002: ", err.Error())
+		fmt.Printf("网络配置错误0x0002: %s(%s)\n", string(out), err.Error())
 		return err
 	}
 	fmt.Println(string(out))
@@ -314,17 +314,17 @@ func installTTUNode() error {
 	fmt.Println("正在配置环境")
 	err = os.MkdirAll("/etc/systemd/system/kubelet.service.d", os.ModePerm)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Println("配置环境错误0x0001: ", err.Error())
 		return err
 	}
 	err = genFile("/etc/systemd/system/kubelet.service", kubeService)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Println("配置环境错误0x0002: ", err.Error())
 		return err
 	}
 	err = genFile("/etc/systemd/system/kubelet.service.d/10-kubeadm.conf", kubeConf)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Println("配置环境错误0x0003: ", err.Error())
 		return err
 	}
 
@@ -332,7 +332,7 @@ func installTTUNode() error {
 	out, err := cmd.CombinedOutput()
 	_ = out
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Printf("配置环境错误0x0004: %s(%s)\n", string(out), err.Error())
 		return err
 	}
 	fmt.Println("配置环境完成")
@@ -382,9 +382,8 @@ func decompress(tip, restore, tar string) error {
 
 	cmd := exec.Command("/bin/bash", "-c", tar)
 	out, err := cmd.CombinedOutput()
-	_ = out
 	if err != nil {
-		fmt.Println("组件%s解压失败: %s\n", tip, err.Error())
+		fmt.Printf("组件%s解压失败: %s(%s)\n", tip, string(out), err.Error())
 		return err
 	}
 	fmt.Printf("组件%s解压完成\n", tip)
@@ -395,9 +394,8 @@ func installBinFile(tip, tar string) error {
 	fmt.Printf("正在安装%s组件...\n", tip)
 	cmd := exec.Command("/bin/bash", "-c", tar)
 	out, err := cmd.CombinedOutput()
-	_ = out
 	if err != nil {
-		fmt.Printf("安装%s组件错误: %s\n", tip, err.Error())
+		fmt.Printf("安装%s组件错误: %s(%s)\n", tip, string(out), err.Error())
 		return err
 	}
 	fmt.Printf("安装%s组件完成\n", tip)
@@ -408,9 +406,8 @@ func installImages(tip, tar string) error {
 	fmt.Printf("正在安装%s镜像...\n", tip)
 	cmd := exec.Command("/bin/bash", "-c", tar)
 	out, err := cmd.CombinedOutput()
-	_ = out
 	if err != nil {
-		fmt.Printf("安装%s镜像错误: %s\n", tip, err.Error())
+		fmt.Printf("安装%s镜像错误: %s(%s)\n", tip, string(out), err.Error())
 		return err
 	}
 	fmt.Printf("安装%s镜像完成\n", tip)
@@ -424,7 +421,7 @@ func joinMasterCluster(f *bufio.Reader) error {
 		fmt.Println("请输入Master节点IP:Port(格式 IP:Port): ")
 		host, _ = f.ReadString('\n')
 		host = formatString(host)
-		fmt.Println(host)
+		//fmt.Println(host)
 		if false == hostAddrCheck(host) {
 			fmt.Println("请检测您输入的 IP:Port是否合法? ")
 		} else {
@@ -435,7 +432,7 @@ func joinMasterCluster(f *bufio.Reader) error {
 	fmt.Println("请输入token: ")
 	token, _ := f.ReadString('\n')
 	token = formatString(token)
-	fmt.Println(token)
+	//fmt.Println(token)
 
 	cmd := exec.Command("/bin/bash", "-c", "kubeadm reset")
 	out, err := cmd.CombinedOutput()
