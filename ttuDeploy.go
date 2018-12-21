@@ -437,7 +437,7 @@ func joinMasterCluster(f *bufio.Reader) error {
 	cmd := exec.Command("/bin/bash", "-c", "kubeadm reset")
 	out, err := cmd.CombinedOutput()
 	//fmt.Println(string(out))
-	cmdArgs := fmt.Sprintf("kubeadm join --token %s %s discovery-token-unsafe-skip-ca-verification", token, host)
+	cmdArgs := fmt.Sprintf("kubeadm join --token %s %s --discovery-token-unsafe-skip-ca-verification", token, host)
 	//fmt.Println(cmdArgs)
 	cmd = exec.Command("/bin/bash", "-c", cmdArgs)
 	out, err = cmd.CombinedOutput()
