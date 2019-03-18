@@ -16,8 +16,7 @@ import (
 	"time"
 )
 
-var dockerfile = `FROM easypi/alpine-arm:3.8
-RUN apk add --no-cache libc6-compat
+var dockerfile = `FROM mxpan/alpine-arm:1.0
 `
 var cmdArgDesr = `
 Usage imageCreator [OPTIONS]
@@ -196,20 +195,20 @@ func main() {
 	if err != nil {
 		fmt.Println("docker image build error: ", err.Error())
 		return
-	} else {
-		tags := strings.Split(*imgTag, ":")
-		//fmt.Println(tags)
-		if len(tags) > 0 {
-			//fmt.Println(tags[0])
-			cmdArgs := "docker images | grep " + tags[0]
-			cmd = exec.Command("bash", "-c", cmdArgs)
-			out, err = cmd.CombinedOutput()
-			if err != nil {
-				fmt.Println("docker image result: ", err.Error())
-			} else {
-				strOut := string(out)
-				fmt.Println(strOut)
-			}
+	}
+
+	tags := strings.Split(*imgTag, ":")
+	//fmt.Println(tags)
+	if len(tags) > 0 {
+		//fmt.Println(tags[0])
+		cmdArgs := "docker images | grep " + tags[0]
+		cmd = exec.Command("bash", "-c", cmdArgs)
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			fmt.Println("docker image result: ", err.Error())
+		} else {
+			strOut := string(out)
+			fmt.Println(strOut)
 		}
 	}
 
