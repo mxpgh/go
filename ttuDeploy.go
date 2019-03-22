@@ -21,7 +21,7 @@ Description=kubelet: The Kubernetes Node Agent
 Documentation=http://kubernetes.io/docs/
 
 [Service]
-ExecStart=/usr/bin/kubelet
+ExecStart=/usr/local/bin/kubelet
 Restart=always
 StartLimitInterval=0
 RestartSec=10
@@ -436,7 +436,7 @@ func joinMasterCluster(f *bufio.Reader) error {
 
 	cmd := exec.Command("/bin/bash", "-c", "kubeadm reset")
 	out, err := cmd.CombinedOutput()
-	//fmt.Println(string(out))
+	fmt.Println(string(out))
 	cmdArgs := fmt.Sprintf("kubeadm join --token %s %s --discovery-token-unsafe-skip-ca-verification", token, host)
 	//fmt.Println(cmdArgs)
 	cmd = exec.Command("/bin/bash", "-c", cmdArgs)
@@ -446,6 +446,6 @@ func joinMasterCluster(f *bufio.Reader) error {
 		return err
 	}
 	fmt.Printf(string(out))
-	
+
 	return nil
 }
