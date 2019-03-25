@@ -13,7 +13,7 @@ import (
 	"ttunodes"
 )
 
-var kubeBinInstallPath = "/usr/local/bin/"
+var kubeBinInstallPath = "/usr/bin/"
 var cniBinInstallPath = "/opt/cni/bin/"
 var kubeService = `
 [Unit]
@@ -21,7 +21,7 @@ Description=kubelet: The Kubernetes Node Agent
 Documentation=http://kubernetes.io/docs/
 
 [Service]
-ExecStart=/usr/local/bin/kubelet
+ExecStart=/usr/bin/kubelet
 Restart=always
 StartLimitInterval=0
 RestartSec=10
@@ -44,7 +44,7 @@ ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_SYSTEM_PODS_ARGS  $
 `
 
 var helpStr = `
-TTU 设备节点组件安装管理：
+TTU 设备节点组件安装管理(version1.0.0)：
 1.安装组件
 2.加入集群
 3.卸载组件
@@ -164,7 +164,7 @@ func main() {
 func uninstallTTUNode() {
 	fmt.Println("正在卸载组件...")
 	// 1. exec kubeadm reset
-	if checkFileIsExist("/usr/local/bin/kubeadm") {
+	if checkFileIsExist("/usr/bin/kubeadm") {
 		cmd := exec.Command("kubeadm", "reset")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -175,7 +175,7 @@ func uninstallTTUNode() {
 		}
 	}
 
-	// 2. remove /usr/local/bin/kubelet /usr/local/kube-proxy /usr/local/bin/kubectl /usr/local/bin/kubeadm
+	// 2. remove /usr/bin/kubelet /usr/bin/kube-proxy /usr/bin/kubectl /usr/bin/kubeadm
 	//	  remove /opt/cni, remove /etc/systemd/system/kubelet.service  /etc/systemd/system/kubelet.service.d
 	kubeBinProgs := []string{"kubelet", "kube-proxy", "kubectl", "kubeadm"}
 	for _, name := range kubeBinProgs {
@@ -186,6 +186,29 @@ func uninstallTTUNode() {
 	os.RemoveAll("/etc/systemd/system/kubelet.service")
 	os.RemoveAll("/etc/systemd/system/kubelet.service.d")
 	fmt.Println("卸载完成")
+}
+
+func checkHosts() error {
+	host, err := os.Hostname()
+	if err != nil {
+		return nil
+	}
+	addrs, err := net.LookupIP(host)
+	if nil == err {
+		for _, addr := range addrs {
+			if ipv4 := addr.To4(); ipv4 != nil {
+				return nil
+			}
+		}
+	}
+
+	fd, err := os.OpenFile("/etc/hosts", os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil
+	}
+	defer fd.Close()
+	fd.WriteString(string(host + "	127.0.0.1"))
+	return nil
 }
 
 func checkDocker() error {
@@ -327,12 +350,21 @@ func installTTUNode() error {
 		fmt.Println("配置环境错误0x0003: ", err.Error())
 		return err
 	}
+	err = checkHosts()
 
-	cmd := exec.Command("/bin/bash", "-c", shellCmdStr)
+	cmd := exec.Command("systemctl enable kubelet.service")
 	out, err := cmd.CombinedOutput()
 	_ = out
 	if err != nil {
 		fmt.Printf("配置环境错误0x0004: %s(%s)\n", string(out), err.Error())
+		return err
+	}
+
+	cmd = exec.Command("/bin/bash", "-c", shellCmdStr)
+	out, err = cmd.CombinedOutput()
+	_ = out
+	if err != nil {
+		fmt.Printf("配置环境错误0x0005: %s(%s)\n", string(out), err.Error())
 		return err
 	}
 	fmt.Println("配置环境完成")
@@ -344,7 +376,7 @@ func installTTUNode() error {
 
 	cmd = exec.Command("/bin/bash", "-c", "rm -rf /tmp/ttu_nodes/node/*.tar.gz")
 	_, err = cmd.CombinedOutput()
-	err = installBinFile("管控", "cp -f /tmp/ttu_nodes/node/* /usr/local/bin/")
+	err = installBinFile("管控", "cp -f /tmp/ttu_nodes/node/* /usr/bin/")
 	if err != nil {
 		return nil
 	}
