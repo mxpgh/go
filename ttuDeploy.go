@@ -422,9 +422,9 @@ func decompress(tip, restore, tar string) error {
 	return nil
 }
 
-func installBinFile(tip, tar string) error {
+func installBinFile(tip, sh string) error {
 	fmt.Printf("正在安装%s组件...\n", tip)
-	cmd := exec.Command("/bin/bash", "-c", tar)
+	cmd := exec.Command("/bin/bash", "-c", sh)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("安装%s组件错误: %s(%s)\n", tip, string(out), err.Error())
@@ -434,9 +434,9 @@ func installBinFile(tip, tar string) error {
 	return nil
 }
 
-func installImages(tip, tar string) error {
+func installImages(tip, sh string) error {
 	fmt.Printf("正在安装%s镜像...\n", tip)
-	cmd := exec.Command("/bin/bash", "-c", tar)
+	cmd := exec.Command("/bin/bash", "-c", sh)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("安装%s镜像错误: %s(%s)\n", tip, string(out), err.Error())
