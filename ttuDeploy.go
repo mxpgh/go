@@ -44,7 +44,7 @@ ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_SYSTEM_PODS_ARGS  $
 `
 
 var helpStr = `
-TTU 设备节点组件安装管理(version1.0.0)：
+TTU 设备节点组件安装管理(version1.0.2)：
 1.安装组件
 2.加入集群
 3.卸载组件
@@ -227,7 +227,7 @@ func checkDocker() error {
 			fi
 		else
 			mkdir -p "/etc/docker"
-			echo "{\"registry-mirrors\": [\"${MIRROR_URL}\"]}" | tee ${DOCKER_DAEMON_JSON_FILE}
+			echo "{\"registry-mirrors\": [\"${MIRROR_URL}\"]}" >> ${DOCKER_DAEMON_JSON_FILE}
 		fi
 	}
 
@@ -334,40 +334,13 @@ func installTTUNode() error {
 		return nil
 	}
 
-	fmt.Println("正在配置环境")
-	err = os.MkdirAll("/etc/systemd/system/kubelet.service.d", os.ModePerm)
-	if err != nil {
-		fmt.Println("配置环境错误0x0001: ", err.Error())
-		return err
-	}
-	err = genFile("/etc/systemd/system/kubelet.service", kubeService)
-	if err != nil {
-		fmt.Println("配置环境错误0x0002: ", err.Error())
-		return err
-	}
-	err = genFile("/etc/systemd/system/kubelet.service.d/10-kubeadm.conf", kubeConf)
-	if err != nil {
-		fmt.Println("配置环境错误0x0003: ", err.Error())
-		return err
-	}
-	err = checkHosts()
-
-	cmd := exec.Command("systemctl enable kubelet.service")
+	cmd := exec.Command("/bin/bash", "-c", shellCmdStr)
 	out, err := cmd.CombinedOutput()
 	_ = out
 	if err != nil {
-		fmt.Printf("配置环境错误0x0004: %s(%s)\n", string(out), err.Error())
+		fmt.Printf("安装网络组件错误0x0001: %s(%s)\n", string(out), err.Error())
 		return err
 	}
-
-	cmd = exec.Command("/bin/bash", "-c", shellCmdStr)
-	out, err = cmd.CombinedOutput()
-	_ = out
-	if err != nil {
-		fmt.Printf("配置环境错误0x0005: %s(%s)\n", string(out), err.Error())
-		return err
-	}
-	fmt.Println("配置环境完成")
 
 	err = installBinFile("网络", "cp -f /tmp/ttu_nodes/cni/* /opt/cni/bin/")
 	if err != nil {
@@ -395,6 +368,34 @@ func installTTUNode() error {
 	if err != nil {
 		return nil
 	}
+
+	fmt.Println("正在配置环境")
+	err = checkHosts()
+	err = os.MkdirAll("/etc/systemd/system/kubelet.service.d", os.ModePerm)
+	if err != nil {
+		fmt.Println("配置环境错误0x0001: ", err.Error())
+		return err
+	}
+	err = genFile("/etc/systemd/system/kubelet.service", kubeService)
+	if err != nil {
+		fmt.Println("配置环境错误0x0002: ", err.Error())
+		return err
+	}
+	err = genFile("/etc/systemd/system/kubelet.service.d/10-kubeadm.conf", kubeConf)
+	if err != nil {
+		fmt.Println("配置环境错误0x0003: ", err.Error())
+		return err
+	}
+
+	cmd = exec.Command("/bin/bash", "-c", "systemctl enable kubelet.service")
+	out, err = cmd.CombinedOutput()
+	_ = out
+	if err != nil {
+		fmt.Printf("配置环境错误0x0004: %s(%s)\n", string(out), err.Error())
+		return err
+	}
+
+	fmt.Println("配置环境完成")
 
 	fmt.Println("正在清理临时文件...")
 	os.RemoveAll("/tmp/ttu_nodes")
