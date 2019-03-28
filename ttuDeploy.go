@@ -44,7 +44,7 @@ ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_SYSTEM_PODS_ARGS  $
 `
 
 var helpStr = `
-TTU 设备节点组件安装管理(version1.0.2)：
+TTU 设备节点组件安装管理(version1.0.3)：
 1.安装组件
 2.加入集群
 3.卸载组件
@@ -127,10 +127,20 @@ func hostAddrCheck(addr string) bool {
 	return true
 }
 
+func getHostname() string {
+	host, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(host)
+}
+
 func main() {
+	checkHosts()
 	fmt.Println(helpStr)
 	f := bufio.NewReader(os.Stdin)
 	for {
+
 		fmt.Println("请输入操作选择：")
 		input, _ := f.ReadString('\n')
 		//fmt.Println(input)
@@ -189,25 +199,98 @@ func uninstallTTUNode() {
 }
 
 func checkHosts() error {
-	host, err := os.Hostname()
-	if err != nil {
-		return nil
-	}
-	addrs, err := net.LookupIP(host)
-	if nil == err {
-		for _, addr := range addrs {
-			if ipv4 := addr.To4(); ipv4 != nil {
-				return nil
+	host := getHostname()
+	fmt.Println("主机名:", host)
+
+	if host == "" || host == "localhost" || host == "localhost.localdomain" {
+		f := bufio.NewReader(os.Stdin)
+		for {
+			fmt.Println("请输入有效的主机名：")
+			input, _ := f.ReadString('\n')
+			input = strings.TrimSpace(input)
+			if input == "" || input == "localhost" || input == "localhost.localdomain" {
+				continue
+			} else {
+				fd, err := os.OpenFile("/etc/hostname", os.O_WRONLY|os.O_TRUNC|os.O_CREATE, os.ModePerm)
+				if err != nil {
+					fmt.Println(err.Error())
+					break
+				}
+				host = input
+				defer fd.Close()
+				fd.WriteString(string(input + "	\n"))
+				cmd := exec.Command("/bin/bash", "-c", "hostname "+input)
+				_, err = cmd.CombinedOutput()
+				if err != nil {
+					fmt.Printf("%s\n", err.Error())
+					break
+				}
+				break
 			}
 		}
 	}
 
-	fd, err := os.OpenFile("/etc/hosts", os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil
+	{
+		fi, err := os.Open("/etc/hosts")
+		if err != nil {
+			fmt.Println(err.Error())
+			return nil
+		}
+		defer fi.Close()
+		exist := false
+		br := bufio.NewReader(fi)
+		for {
+			a, _, c := br.ReadLine()
+			if c == io.EOF {
+				break
+			}
+			if true == strings.Contains(string(a), host) {
+				exist = true
+				break
+			}
+		}
+		fi.Close()
+
+		if false == exist {
+			fd, err := os.OpenFile("/etc/hosts", os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				return nil
+			}
+			defer fd.Close()
+			fd.WriteString("127.0.0.1 " + host + "\n")
+		}
 	}
-	defer fd.Close()
-	fd.WriteString(string(host + "	127.0.0.1"))
+
+	{
+		fi, err := os.Open("/etc/resolv.conf")
+		if err != nil {
+			fmt.Println(err.Error())
+			return nil
+		}
+		defer fi.Close()
+
+		exist := false
+		br := bufio.NewReader(fi)
+		for {
+			a, _, c := br.ReadLine()
+			if c == io.EOF {
+				break
+			}
+			if true == strings.Contains(string(a), "8.8.8.8") {
+				exist = true
+				break
+			}
+		}
+		if false == exist {
+			fd, err := os.OpenFile("/etc/resolv.conf", os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				return nil
+			}
+			defer fd.Close()
+			fd.WriteString("nameserver	8.8.8.8 \n")
+		}
+	}
+
 	return nil
 }
 
@@ -309,7 +392,7 @@ func installTTUNode() error {
 
 	defer os.RemoveAll("/tmp/ttu_nodes")
 
-	err := decompress("网络(cni)", "ttu_nodes/cni.tar.gz", "tar -zxvf /tmp/ttu_nodes/cni.tar.gz -C /tmp/ttu_nodes/")
+	err := decompress("网络", "ttu_nodes/cni.tar.gz", "tar -zxvf /tmp/ttu_nodes/cni.tar.gz -C /tmp/ttu_nodes/")
 	if err != nil {
 		return nil
 	}
@@ -319,17 +402,17 @@ func installTTUNode() error {
 		return nil
 	}
 
-	err = decompress("管理(kubeadm)", "ttu_nodes/node/kubeadm.tar.gz", "tar -zxvf /tmp/ttu_nodes/node/kubeadm.tar.gz -C /tmp/ttu_nodes/node/")
+	err = decompress("管理", "ttu_nodes/node/kubeadm.tar.gz", "tar -zxvf /tmp/ttu_nodes/node/kubeadm.tar.gz -C /tmp/ttu_nodes/node/")
 	if err != nil {
 		return nil
 	}
 
-	err = decompress("控制(kubelet)", "ttu_nodes/node/kubelet.tar.gz", "tar -zxvf /tmp/ttu_nodes/node/kubelet.tar.gz -C /tmp/ttu_nodes/node/")
+	err = decompress("控制", "ttu_nodes/node/kubelet.tar.gz", "tar -zxvf /tmp/ttu_nodes/node/kubelet.tar.gz -C /tmp/ttu_nodes/node/")
 	if err != nil {
 		return nil
 	}
 
-	err = decompress("网络代理(kube-proxy)", "ttu_nodes/node/kube-proxy.tar.gz", "tar -zxvf /tmp/ttu_nodes/node/kube-proxy.tar.gz -C /tmp/ttu_nodes/node/")
+	err = decompress("网络代理", "ttu_nodes/node/kube-proxy.tar.gz", "tar -zxvf /tmp/ttu_nodes/node/kube-proxy.tar.gz -C /tmp/ttu_nodes/node/")
 	if err != nil {
 		return nil
 	}
@@ -370,7 +453,6 @@ func installTTUNode() error {
 	}
 
 	fmt.Println("正在配置环境")
-	err = checkHosts()
 	err = os.MkdirAll("/etc/systemd/system/kubelet.service.d", os.ModePerm)
 	if err != nil {
 		fmt.Println("配置环境错误0x0001: ", err.Error())
