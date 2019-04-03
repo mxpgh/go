@@ -16,6 +16,35 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type cmd104 struct {
+	wr []byte
+	rd []byte
+}
+
+type cmdIndex int32
+
+const (
+	U104 cmdIndex = iota
+	CALL
+	TEST
+)
+
+var ttu104 = []cmd104{
+	{
+		[]byte{0x68, 0x04, 0x07, 0x00, 0x00, 0x00},
+		[]byte{0x68, 0x04, 0x0B, 0x00, 0x00, 0x00},
+	},
+	{
+		[]byte{0x68, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x64, 0x01, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14},
+		[]byte{0x68, 0x0E, 0x00, 0x00, 0x02, 0x00, 0x64, 0x01, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14},
+	},
+	{
+		[]byte{0x68, 0x04, 0x43, 0x00, 0x00, 0x00},
+		[]byte{0x68, 0x04, 0x83, 0x00, 0x00, 0x00},
+	},
+}
+
+/*
 var (
 	u104        = []byte{0x68, 0x04, 0x07, 0x00, 0x00, 0x00}
 	u104ok      = []byte{0x68, 0x04, 0x0B, 0x00, 0x00, 0x00}
@@ -23,7 +52,7 @@ var (
 	call104ok   = []byte{0x68, 0x0E, 0x00, 0x00, 0x02, 0x00, 0x64, 0x01, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14}
 	u104test    = []byte{0x68, 0x04, 0x43, 0x00, 0x00, 0x00}
 	u104testRsp = []byte{0x68, 0x04, 0x83, 0x00, 0x00, 0x00}
-)
+)*/
 
 var templatePath string
 var upgrader = &websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024}
@@ -62,7 +91,7 @@ func handleConnection(conn net.Conn) {
 	conn.SetReadDeadline(time.Now().Add(time.Duration(10) * time.Second))
 
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, u104)
+	binary.Write(buf, binary.LittleEndian, ttu104[U104].wr)
 	l, err := conn.Write(buf.Bytes())
 	if err != nil {
 		log.Println("handleConnection ", conn.RemoteAddr().String(), " write ", err)
@@ -80,11 +109,24 @@ func handleConnection(conn net.Conn) {
 
 		log.Printf("handleConnection %s receive data:%X \n", conn.RemoteAddr().String(), buffer[:n])
 
-		if bytes.Equal(buffer[:n], u104ok) {
+		/*
+			for _, t := range ttu104 {
+				if bytes.Equal(buffer[:n], t.rd) {
+					buf := new(bytes.Buffer)
+					binary.Write(buf, binary.LittleEndian, call104)
+					l, err := conn.Write(buf.Bytes())
+					if err != nil {
+						log.Println("handleConnection ", conn.RemoteAddr().String(), " write call cmd ", err)
+					} else {
+						log.Println("handleConnection ", conn.RemoteAddr().String(), " write call cmd ", l)
+					}
+				}
+			}*/
+		if bytes.Equal(buffer[:n], ttu104[U104].rd) {
 			log.Println("handleConnection recv start cmd u ok")
 
 			buf := new(bytes.Buffer)
-			binary.Write(buf, binary.LittleEndian, call104)
+			binary.Write(buf, binary.LittleEndian, ttu104[CALL].wr)
 			l, err := conn.Write(buf.Bytes())
 			if err != nil {
 				log.Println("handleConnection ", conn.RemoteAddr().String(), " write call cmd ", err)
@@ -92,10 +134,10 @@ func handleConnection(conn net.Conn) {
 				log.Println("handleConnection ", conn.RemoteAddr().String(), " write call cmd ", l)
 			}
 		}
-		if bytes.Equal(buffer[:n], call104ok) {
+		if bytes.Equal(buffer[:n], ttu104[CALL].rd) {
 			log.Printf("handleConnection %s receive call cmd ok :%X \n", conn.RemoteAddr().String(), buffer[:n])
 		}
-		if bytes.Equal(buffer[:n], u104testRsp) {
+		if bytes.Equal(buffer[:n], ttu104[TEST].rd) {
 			log.Printf("handleConnection %s receive heartbeat data:%X \n", conn.RemoteAddr().String(), buffer[:n])
 		}
 
@@ -113,7 +155,7 @@ LOOP:
 		case <-timer.C:
 			log.Println("handleHeartbeat ", conn.RemoteAddr().String(), " heartbeat")
 			buf := new(bytes.Buffer)
-			binary.Write(buf, binary.LittleEndian, u104test)
+			binary.Write(buf, binary.LittleEndian, ttu104[TEST].wr)
 			l, err := conn.Write(buf.Bytes())
 			if err != nil {
 				log.Println("handleHeartbeat ", conn.RemoteAddr().String(), " write ", err)
@@ -126,6 +168,10 @@ LOOP:
 }
 
 func main() {
+
+	for _, t := range ttu104 {
+		log.Println(t.rd, ":", bytesToString(t.rd), ",", t.wr, ":", bytesToString(t.wr))
+	}
 
 	netListen, err := net.Listen("tcp", "0.0.0.0:6025")
 	if err != nil {
