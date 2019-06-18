@@ -25,7 +25,7 @@ type appList struct {
 }
 
 func main() {
-	log.Println("appmoitor version1.0.0.0")
+	log.Println("appmoitor version1.0.0")
 
 	go check()
 
@@ -49,6 +49,7 @@ func readFile() ([]byte, error) {
 		log.Println("readFile 0x0001:", err)
 		return nil, err
 	}
+
 	defer fl.Close()
 	content, err := ioutil.ReadAll(fl)
 	if err != nil {
@@ -64,15 +65,15 @@ func writeFile(lst *appList) error {
 	if err != nil {
 		log.Println("writeFile 0x0001:", err)
 		return err
-	} else {
-		fd, err := os.OpenFile(cfgFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
-		if err != nil {
-			log.Println("writeFile 0x0002:", err.Error())
-			return err
-		}
-		defer fd.Close()
-		fd.Write(data)
 	}
+
+	fd, err := os.OpenFile(cfgFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
+	if err != nil {
+		log.Println("writeFile 0x0002:", err.Error())
+		return err
+	}
+	defer fd.Close()
+	fd.Write(data)
 
 	return nil
 }
