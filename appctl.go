@@ -24,12 +24,20 @@ type AppCmdType int8
 
 const (
 	_ AppCmdType = iota
+	APP_CTL_INSTALL
 	APP_CTL_START
 	APP_CTL_STOP
 	APP_CTL_ENABLE
 	APP_CTL_DISABLE
 	APP_CTL_RM
 	APP_CTL_LIST
+	APP_CTL_VERSION
+)
+
+const (
+	_ AppCmdType = iota
+	APP_STATUS_RUNNING
+	APP_STATUS_STOP
 )
 
 type appCtlCmdReq struct {
@@ -37,13 +45,13 @@ type appCtlCmdReq struct {
 	Name string
 	Log  int8
 }
-
 type appCtlCmdRsp struct {
 	Cmd    AppCmdType
 	Name   string
+	Code   int16
 	Result string
 	Total  int32
-	Items  []appList
+	Items  []appItem
 }
 
 type srvItem struct {
@@ -70,13 +78,8 @@ type appItem struct {
 	SrvItems []srvItem
 }
 
-type appList struct {
-	Total int32
-	Items []appItem
-}
-
 func main() {
-	log.Println("appctl version1.0.0")
+	//log.Println("appctl version1.0.0")
 	len := len(os.Args)
 	if len < 2 {
 		fmt.Println("args less: len=", len)
@@ -126,6 +129,13 @@ func main() {
 	go readUnixgram()
 
 	switch os.Args[1] {
+	case "-install":
+		{
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_INSTALL
+			ctl.Name = os.Args[2]
+			writeUnixgram(&ctl)
+		}
 	case "-start":
 		{
 			ctl := appCtlCmdReq{}
@@ -164,7 +174,7 @@ func main() {
 	case "-list":
 		{
 			ctl := appCtlCmdReq{}
-			ctl.Cmd = APP_CTL_RM
+			ctl.Cmd = APP_CTL_LIST
 			ctl.Name = os.Args[2]
 			if os.Args[3] == "-log" {
 				ctl.Log = 1
@@ -174,7 +184,15 @@ func main() {
 
 			writeUnixgram(&ctl)
 		}
+	case "-version":
+		{
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_VERSION
+			ctl.Name = os.Args[2]
+			writeUnixgram(&ctl)
+		}
 	default:
+		log.Println("Command args error.")
 		os.Exit(0)
 		return
 	}
@@ -192,15 +210,78 @@ func closeUinxgram(ext bool) {
 
 func readUnixgram() {
 	for {
-		gUnixConn.SetReadDeadline(time.Second * 3)
+		t := time.Now()
+		gUnixConn.SetReadDeadline(t.Add(time.Duration(3 * time.Second)))
 		buf := make([]byte, 1400)
 		size, err := gUnixConn.Read(buf)
 		if err != nil {
-			log.Println("readUnixgram error: ", err)
+			fmt.Println("readUnixgram error: ", err)
 			break
 		}
-		fmt.Println("recv:", string(buf[:size]))
+		data := bytes.NewBuffer(buf[:size])
+		dec := gob.NewDecoder(data)
+		ctlRsp := appCtlCmdRsp{}
+		err = dec.Decode(&ctlRsp)
+		if err != nil {
+			fmt.Println("decode error: ", err)
+			break
+		}
+		switch ctlRsp.Cmd {
+		case APP_CTL_INSTALL:
+			if 0 == ctlRsp.Code {
+
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+		case APP_CTL_START:
+			if 0 == ctlRsp.Code {
+
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+		case APP_CTL_STOP:
+			if 0 == ctlRsp.Code {
+
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+		case APP_CTL_ENABLE:
+			if 0 == ctlRsp.Code {
+
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+		case APP_CTL_DISABLE:
+			if 0 == ctlRsp.Code {
+
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_RM:
+			if 0 == ctlRsp.Code {
+
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+		case APP_CTL_LIST:
+			if 0 == ctlRsp.Code {
+				handleAppList(&ctlRsp)
+			} else {
+				fmt.Println(ctlRsp.Result)
+			}
+		case APP_CTL_VERSION:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				//log.Println(ctlRsp.Result)
+			}
+		}
+		//fmt.Println("recv:", string(buf[:size]))
+		break
 	}
+
+	os.Exit(0)
 	return
 }
 
@@ -209,12 +290,56 @@ func writeUnixgram(req *appCtlCmdReq) {
 	enc := gob.NewEncoder(buf)
 	err := enc.Encode(req)
 	if err != nil {
-		log.Println("gob encode error: ", err)
+		fmt.Println("gob encode error: ", err)
+		os.Exit(0)
 		return
 	}
 	_, err = gUnixConn.Write(buf.Bytes())
 	if err != nil {
-		log.Println("writeUnixgram error: ", err)
+		fmt.Println("writeUnixgram error: ", err)
+		os.Exit(0)
 		return
+	}
+}
+
+func handleAppList(rsp *appCtlCmdRsp) {
+	fmt.Printf("Total app number %d \n\n", rsp.Total)
+
+	for k, v := range rsp.Items {
+		_ = k
+		fmt.Printf("%-20s: %d\n", "App index", v.Index)
+		fmt.Printf("%-20s: %s\n", "App name", v.Name)
+		fmt.Printf("%-20s: %s\n", "App version", v.Version)
+		fmt.Printf("%-20s: %s\n", "App hash", v.Hash)
+
+		for i, t := range v.SrvItems {
+			_ = i
+			fmt.Printf("%-20s: %d\n", "Service index", t.Index)
+			fmt.Printf("%-20s: %s\n", "Service name", t.Name)
+
+			if t.Enable == 1 {
+				fmt.Printf("%-20s: yes\n", "Service enable")
+			} else {
+				fmt.Printf("%-20s: no\n", "Service enable")
+			}
+
+			if t.Status == int8(APP_STATUS_RUNNING) {
+				fmt.Printf("%-20s: running\n", "Service status")
+			} else {
+				fmt.Printf("%-20s: stop\n", "Service status")
+			}
+
+			fmt.Printf("%-20s: %d\n", "Cpu threshold", t.CpuThreshold)
+			fmt.Printf("%-20s: %d\n", "Cpu usage", t.CpuUsage)
+			fmt.Printf("%-20s: %d\n", "Mem threshold", t.MemThreshold)
+			fmt.Printf("%-20s: %d\n", "Mem usage", t.MemUsage)
+			fmt.Printf("%-20s: %s\n", "Start time", time.Unix(t.StartTime, 0).Format("2006-01-02 15:04:05"))
+
+			if t.LogsStartTime != 0 {
+				fmt.Printf("-- Logs begin at %s, end at %s, --\n", time.Unix(t.LogsStartTime, 0).Format("2006-01-02 15:04:05"), time.Unix(t.LogsEndTime, 0).Format("2006-01-02 15:04:05"))
+			}
+
+			fmt.Printf("\n")
+		}
 	}
 }

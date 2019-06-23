@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -13,23 +15,41 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
 
+const version string = "1.00"
 const cfgFile string = "monitor.cfg"
+const defAppVersionFile string = "version.cfg"
 const defAppsFolder string = "/usr/local/apps"
+const defAppsExtFolder string = "/usr/local/extapps"
 
 type AppCmdType int8
 
 const (
 	_ AppCmdType = iota
+	APP_CTL_INSTALL
 	APP_CTL_START
 	APP_CTL_STOP
 	APP_CTL_ENABLE
 	APP_CTL_DISABLE
 	APP_CTL_RM
 	APP_CTL_LIST
+	APP_CTL_VERSION
+)
+
+const (
+	_ AppCmdType = iota
+	APP_CMD_START
+	APP_CMD_STOP
+)
+
+const (
+	_ AppCmdType = iota
+	APP_STATUS_RUNNING
+	APP_STATUS_STOP
 )
 
 var (
@@ -50,9 +70,10 @@ type appCtlCmdReq struct {
 type appCtlCmdRsp struct {
 	Cmd    AppCmdType
 	Name   string
+	Code   int16
 	Result string
 	Total  int32
-	Items  []appList
+	Items  []appItem
 }
 
 type srvItem struct {
@@ -79,20 +100,16 @@ type appItem struct {
 	SrvItems []srvItem
 }
 
-type appList struct {
-	Total int32
-	Items []appItem
-}
-
 type taskItem struct {
 	Pid          int    `json:"pid"`
 	Name         string `json:"name"`
 	Path         string `json:"path"`
 	Cmd          int    `json:"cmd"`
+	Status       int    `json:"status"`
 	Enable       int    `json:"enable"`
-	StartTime    string `json:"starttime"`
-	LogStartTime string `json:"logstarttime`
-	LogEndTime   string `json:"logendtime"`
+	StartTime    int64  `json:"starttime"`
+	LogStartTime int64  `json:"logstarttime`
+	LogEndTime   int64  `json:"logendtime"`
 	Param        string `json:"param"`
 }
 
@@ -106,12 +123,22 @@ type taskCmd struct {
 }
 
 func main() {
-	log.Println("appctl-daemon version1.0.0")
+	log.Println("appctl-daemon version ", version)
 
 	if _, err := os.Stat(defAppsFolder); os.IsNotExist(err) {
 		// 必须分成两步：先创建文件夹、再修改权限
-		os.Mkdir(defAppsFolder, os.ModePerm) //0777也可以os.ModePerm
-		os.Chmod(defAppsFolder, os.ModePerm)
+		os.Mkdir(defAppsFolder, 0755)
+		oldMask := syscall.Umask(0)
+		os.Chmod(defAppsFolder, 0755)
+		syscall.Umask(oldMask)
+	}
+
+	if _, err := os.Stat(defAppsExtFolder); os.IsNotExist(err) {
+		// 必须分成两步：先创建文件夹、再修改权限
+		os.Mkdir(defAppsExtFolder, 0755)
+		oldMask := syscall.Umask(0)
+		os.Chmod(defAppsExtFolder, 0755)
+		syscall.Umask(oldMask)
 	}
 
 	gUnixAddr, err := net.ResolveUnixAddr("unixgram", "/var/run/appctl-daemon.sock")
@@ -195,7 +222,7 @@ func writeFile(lst *taskList) error {
 		return err
 	}
 
-	fd, err := os.OpenFile(cfgFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
+	fd, err := os.OpenFile(cfgFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Println("writeFile 0x0002:", err.Error())
 		return err
@@ -231,6 +258,17 @@ func findAppItem(name string) *taskItem {
 	return nil
 }
 
+func findAppList(name string) []taskItem {
+	var itemList []taskItem
+	for k, v := range gTaskList {
+		_ = k
+		if v.Name == name {
+			itemList = append(itemList, gTaskList[k])
+		}
+	}
+	return itemList
+}
+
 func handleTask() {
 	loadAppList()
 
@@ -245,28 +283,29 @@ func handleTask() {
 					log.Println("chan err")
 				} else {
 					switch ctlReq.req.Cmd {
+					case APP_CTL_INSTALL:
+						handleAppInstall(ctlReq)
+
 					case APP_CTL_START:
 						handleAppStart(ctlReq)
 
 					case APP_CTL_STOP:
 						handleAppStop(ctlReq)
-						log.Println("cmd stop: ", ctlReq.req.Name)
 
 					case APP_CTL_ENABLE:
 						handleAppEnable(ctlReq)
-						log.Println("cmd enable: ", ctlReq.req.Name)
 
 					case APP_CTL_DISABLE:
 						handleAppDisable(ctlReq)
-						log.Println("cmd disable: ", ctlReq.req.Name)
 
 					case APP_CTL_RM:
 						handleAppRM(ctlReq)
-						log.Println("cmd rm: ", ctlReq.req.Name)
 
 					case APP_CTL_LIST:
 						handleAppList(ctlReq)
-						log.Println("cmd list: ", ctlReq.req.Name)
+
+					case APP_CTL_VERSION:
+						handleAppVersion(ctlReq)
 					}
 				}
 			}
@@ -283,29 +322,38 @@ func checkApps() {
 	needUpd := false
 	for k, v := range gTaskList {
 		_ = k
+		v.Param = ""
 		//log.Println(v.Path, ",", v.Param, ",", v.Pid)
 		if isAlive(v.Pid) {
 			ret, err := os.Readlink("/proc/" + strconv.Itoa(v.Pid) + "/exe")
 			if err == nil && ret == v.Path {
+				gTaskList[k].Status = int(APP_STATUS_RUNNING)
 				//log.Println("link:", ret)
 				continue
 			} else {
-				log.Println("checkApps 0x0002:", err, ",", v.Path)
+				log.Println("checkApps 0x0001:", err, ",", v.Path)
 			}
 		}
-		cmd := exec.Command(v.Path, v.Param)
-		if cmd != nil {
-			err := cmd.Start()
-			if err != nil {
-				log.Println("checkApps 0x0003:", err)
+
+		if v.Cmd == int(APP_CMD_START) {
+			cmd := exec.Command(v.Path, v.Param)
+			if cmd != nil {
+				err := cmd.Start()
+				if err != nil {
+					log.Println("checkApps 0x0002:", err)
+				} else {
+					needUpd = true
+					gTaskList[k].Pid = cmd.Process.Pid
+					gTaskList[k].Status = int(APP_STATUS_RUNNING)
+					gTaskList[k].StartTime = time.Now().Unix()
+					gTaskList[k].LogEndTime = time.Now().Unix()
+					log.Println("checkApps start name =", v.Name, ", path =", v.Path, ", pid =", v.Pid)
+				}
 			} else {
-				needUpd = true
-				gTaskList[k].Pid = cmd.Process.Pid
-				log.Println("checkApps start name =", v.Name, ", path =", v.Path, ", pid =", v.Pid)
+				log.Println("checkApps exec cmd nil:", v.Path)
 			}
-		} else {
-			log.Println("checkApps exec cmd nil:", v.Path)
 		}
+
 	}
 
 	if needUpd {
@@ -331,8 +379,8 @@ func readUnixgram() error {
 			break
 		}
 
-		fmt.Println("recv:", string(buf[:size]), " from ", remote.String())
-		gUnixConn.WriteToUnix(buf[:size], remote)
+		//fmt.Println("recv:", string(buf[:size]), " from ", remote.String())
+		//gUnixConn.WriteToUnix(buf[:size], remote)
 
 		data := bytes.NewBuffer(buf[:size])
 		dec := gob.NewDecoder(data)
@@ -351,58 +399,413 @@ func readUnixgram() error {
 	return nil
 }
 
-func handleAppStart(ctl *taskCmd) {
+func handleAppInstall(ctl *taskCmd) {
 	fn := filepath.Join(defAppsFolder, ctl.req.Name)
-	if checkFileIsExist(fn) {
-		item := findAppItem(ctl.req.Name)
-		if item != nil {
-			item.Cmd = 1
-		} else {
-			item := taskItem{}
-			item.Name = ctl.req.Name
-			item.Path = fn
-			item.Cmd = 1
-			item.Enable = 1
-			cmd := exec.Command(item.Path, item.Param)
-			if cmd != nil {
-				err := cmd.Start()
-				if err != nil {
-					log.Println("checkApps 0x0003:", err)
-					gUnixConn.WriteToUnix([]byte("Operation failed"), ctl.remote)
-				} else {
-					item.Pid = cmd.Process.Pid
-					gTaskList = append(gTaskList, item)
-					log.Println("checkApps start name =", item.Name, ", path =", item.Path, ", pid =", item.Pid)
-					gUnixConn.WriteToUnix([]byte("ok"), ctl.remote)
-				}
-			} else {
-				log.Println("checkApps exec cmd nil:", item.Path)
-				gUnixConn.WriteToUnix([]byte("Operation failed"), ctl.remote)
-			}
-		}
+	log.Println("handleAppInstall: ", fn)
 
-	} else {
-		gUnixConn.WriteToUnix([]byte("file not exist"), ctl.remote)
+	if false == checkFileIsExist(fn) {
+		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		return
 	}
-	log.Println("cmd start: ", ctl.req.Name)
+	cmd := exec.Command("/bin/bash", "-c", "tar -zxvf "+fn+" -C "+defAppsExtFolder)
+	out, err := cmd.CombinedOutput()
+	_ = out
+	if err != nil {
+		log.Printf("handleAppInstall: %s(%s)\n", string(out), err.Error())
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		return
+	}
+	writeCtlSimpleRsp(ctl, 0, "Success.")
+}
+
+func handleAppStart(ctl *taskCmd) {
+	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
+	fn := filepath.Join(path, ctl.req.Name)
+	log.Println("handleAppStart: ", fn)
+
+	if false == checkFileIsExist(fn) {
+		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		return
+	}
+
+	item := findAppItem(ctl.req.Name)
+	if item != nil {
+		item.Cmd = int(APP_CMD_START)
+	} else {
+		item := taskItem{}
+		item.Name = ctl.req.Name
+		item.Path = fn
+		item.Cmd = int(APP_CMD_START)
+		item.Enable = 1
+		cmd := exec.Command(item.Path, item.Param)
+		if cmd != nil {
+			err := cmd.Start()
+			if err != nil {
+				log.Println("checkApps 0x0003:", err)
+				writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+			} else {
+				item.Pid = cmd.Process.Pid
+				item.StartTime = time.Now().Unix()
+				item.LogStartTime = time.Now().Unix()
+				item.LogEndTime = time.Now().Unix()
+				gTaskList = append(gTaskList, item)
+				log.Println("checkApps start name =", item.Name, ", path =", item.Path, ", pid =", item.Pid)
+				writeCtlSimpleRsp(ctl, 0, "Success.")
+			}
+		} else {
+			log.Println("checkApps exec cmd nil:", item.Path)
+			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		}
+	}
 }
 
 func handleAppStop(ctl *taskCmd) {
+	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
+	fn := filepath.Join(path, ctl.req.Name)
+	log.Println("handleAppStop: ", fn)
 
+	if false == checkFileIsExist(fn) {
+		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		return
+	}
+
+	item := findAppItem(ctl.req.Name)
+	if item != nil {
+		item.Cmd = int(APP_CMD_STOP)
+		item.LogEndTime = time.Now().Unix()
+		err := syscall.Kill(item.Pid, 9)
+		if err != nil {
+			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		} else {
+			writeCtlSimpleRsp(ctl, 0, "Success.")
+		}
+
+	} else {
+		item := taskItem{}
+		item.Name = ctl.req.Name
+		item.Path = fn
+		item.Cmd = int(APP_CMD_STOP)
+		item.Enable = 1
+		item.LogStartTime = time.Now().Unix()
+		item.LogEndTime = time.Now().Unix()
+		gTaskList = append(gTaskList, item)
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+	}
 }
 
 func handleAppEnable(ctl *taskCmd) {
+	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
+	fn := filepath.Join(path, ctl.req.Name)
+	log.Println("handleAppEnable: ", fn)
 
+	if false == checkFileIsExist(fn) {
+		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		return
+	}
+
+	item := findAppItem(ctl.req.Name)
+	if item != nil {
+		item.Enable = 1
+		item.LogEndTime = time.Now().Unix()
+	} else {
+		item := taskItem{}
+		item.Name = ctl.req.Name
+		item.Path = fn
+		item.Enable = 1
+		item.LogStartTime = time.Now().Unix()
+		item.LogEndTime = time.Now().Unix()
+		gTaskList = append(gTaskList, item)
+	}
+
+	oldMask := syscall.Umask(0)
+	err := os.Chmod(fn, 0755)
+	syscall.Umask(oldMask)
+	if err != nil {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+	} else {
+		writeCtlSimpleRsp(ctl, 0, "Success.")
+	}
 }
 
 func handleAppDisable(ctl *taskCmd) {
+	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
+	fn := filepath.Join(path, ctl.req.Name)
+	log.Println("handleAppDisable: ", fn)
 
+	if false == checkFileIsExist(fn) {
+		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		return
+	}
+
+	item := findAppItem(ctl.req.Name)
+	if item != nil {
+		item.Enable = 0
+		item.LogEndTime = time.Now().Unix()
+	} else {
+		item := taskItem{}
+		item.Name = ctl.req.Name
+		item.Path = fn
+		item.Enable = 0
+		item.LogStartTime = time.Now().Unix()
+		item.LogEndTime = time.Now().Unix()
+		gTaskList = append(gTaskList, item)
+	}
+
+	oldMask := syscall.Umask(0)
+	err := os.Chmod(fn, 0644)
+	syscall.Umask(oldMask)
+	if err != nil {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+	} else {
+		writeCtlSimpleRsp(ctl, 0, "Success.")
+	}
 }
 
 func handleAppRM(ctl *taskCmd) {
+	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
+	fn := filepath.Join(path, ctl.req.Name)
+	log.Println("handleAppRM: ", fn)
 
+	if false == checkFileIsExist(fn) {
+		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		return
+	}
+
+	code := int16(1)
+	ret := ""
+	item := findAppItem(ctl.req.Name)
+	if item != nil {
+		if item.Status == int(APP_STATUS_RUNNING) {
+			syscall.Kill(item.Pid, 9)
+		}
+	} else {
+		code = 1
+		ret = "Operation failed."
+	}
+
+	err := os.RemoveAll(path)
+	if err != nil {
+		code = 1
+		ret = "Operation failed."
+	} else {
+		code = 0
+		ret = "Success."
+	}
+
+	removeItem(item)
+	writeCtlSimpleRsp(ctl, code, ret)
 }
 
 func handleAppList(ctl *taskCmd) {
+	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
+	fn := filepath.Join(path, ctl.req.Name)
+	log.Println("handleAppList: ", fn)
 
+	appMap := make(map[string][]taskItem)
+	for k, v := range gTaskList {
+		_ = k
+		appMap[v.Name] = append(appMap[v.Name], v)
+	}
+
+	if len(ctl.req.Name) > 0 {
+		if false == checkFileIsExist(fn) {
+			writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+			return
+		}
+
+		rsp := &appCtlCmdRsp{}
+		rsp.Cmd = ctl.req.Cmd
+		rsp.Name = ctl.req.Name
+		rsp.Code = 0
+		rsp.Result = "Success."
+		rsp.Total = int32(len(appMap))
+
+		var srvList []srvItem
+		itemList := findAppList(ctl.req.Name)
+		for k, v := range itemList {
+			_ = k
+			item := srvItem{}
+			item.Index = int32(k)
+			item.Name = "srv" + strconv.Itoa(k)
+			item.Enable = int8(v.Enable)
+			item.Status = int8(v.Status)
+			item.CpuThreshold = 90
+			item.CpuUsage = 0
+			item.MemThreshold = 90
+			item.MemUsage = 0
+			item.StartTime = v.StartTime
+			if ctl.req.Log == 1 {
+				item.LogsStartTime = v.LogStartTime
+				item.LogsEndTime = v.LogEndTime
+			} else {
+				item.LogsStartTime = 0
+				item.LogsEndTime = 0
+			}
+
+			srvList = append(srvList, item)
+		}
+		appitem := appItem{}
+		appitem.Index = 0
+		appitem.Name = ctl.req.Name
+		appitem.Version = getAppVersion(ctl.req.Name)
+		appitem.Hash = getAppHash(ctl.req.Name)
+		appitem.SrvTotal = int32(len(srvList))
+		appitem.SrvItems = srvList
+
+		rsp.Items = append(rsp.Items, appitem)
+		writeCtlRsp(rsp, ctl.remote)
+		return
+	}
+
+	rsp := &appCtlCmdRsp{}
+	rsp.Cmd = ctl.req.Cmd
+	rsp.Name = ctl.req.Name
+	rsp.Code = 0
+	rsp.Result = "Success."
+	rsp.Total = int32(len(appMap))
+
+	for mK, mV := range appMap {
+		_ = mK
+		var srvList []srvItem
+		for k, v := range mV {
+			_ = k
+			item := srvItem{}
+			item.Index = int32(k)
+			item.Name = "srv" + strconv.Itoa(k)
+			item.Enable = int8(v.Enable)
+			item.Status = int8(v.Status)
+			item.CpuThreshold = 90
+			item.CpuUsage = 0
+			item.MemThreshold = 90
+			item.MemUsage = 0
+			item.StartTime = v.StartTime
+			if ctl.req.Log == 1 {
+				item.LogsStartTime = v.LogStartTime
+				item.LogsEndTime = v.LogEndTime
+			} else {
+				item.LogsStartTime = 0
+				item.LogsEndTime = 0
+			}
+
+			srvList = append(srvList, item)
+		}
+		appitem := appItem{}
+		appitem.Index = 0
+		appitem.Name = ctl.req.Name
+		appitem.Version = getAppVersion(ctl.req.Name)
+		appitem.Hash = getAppHash(ctl.req.Name)
+		appitem.SrvTotal = int32(len(srvList))
+		appitem.SrvItems = srvList
+
+		rsp.Items = append(rsp.Items, appitem)
+	}
+
+	writeCtlRsp(rsp, ctl.remote)
+}
+
+func handleAppVersion(ctl *taskCmd) {
+	log.Println("handleAppVersion: ", ctl.req.Name)
+	if ctl.req.Name == "container" {
+		writeCtlSimpleRsp(ctl, 0, version)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+	}
+}
+
+func writeCtlSimpleRsp(ctl *taskCmd, code int16, ret string) {
+	buf := new(bytes.Buffer)
+	enc := gob.NewEncoder(buf)
+	rsp := &appCtlCmdRsp{}
+	rsp.Cmd = ctl.req.Cmd
+	rsp.Name = ctl.req.Name
+	rsp.Code = code
+	rsp.Result = ret
+	err := enc.Encode(rsp)
+	if err != nil {
+		log.Println("writeCtlRsp gob encode error: ", err)
+		return
+	}
+	_, err = gUnixConn.WriteToUnix(buf.Bytes(), ctl.remote)
+	if err != nil {
+		log.Println("writeCtlRsp error: ", err)
+		return
+	}
+}
+
+func writeCtlRsp(rsp *appCtlCmdRsp, remote *net.UnixAddr) {
+	buf := new(bytes.Buffer)
+	enc := gob.NewEncoder(buf)
+	err := enc.Encode(rsp)
+	if err != nil {
+		log.Println("writeCtlRsp gob encode error: ", err)
+		return
+	}
+	_, err = gUnixConn.WriteToUnix(buf.Bytes(), remote)
+	if err != nil {
+		log.Println("writeCtlRsp error: ", err)
+		return
+	}
+}
+
+func removeItem(item *taskItem) bool {
+	for i := 0; i < len(gTaskList); i++ {
+		if gTaskList[i].Name == item.Name {
+			gTaskList = append(gTaskList[:i], gTaskList[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func getAppCPU(name string) int {
+	return 0
+}
+
+func getAppMem(name string) int {
+	return 0
+}
+
+func getAppVersion(name string) string {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, defAppVersionFile)
+	fl, err := os.Open(fn)
+	if err != nil {
+		log.Println("getAppVersion 0x0001:", err)
+		return ""
+	}
+
+	defer fl.Close()
+	content, err := ioutil.ReadAll(fl)
+	if err != nil {
+		log.Println("getAppVersion 0x0002:", err)
+		return ""
+	}
+
+	return formatString(string(content))
+}
+
+func getAppHash(name string) string {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, name)
+	f, err := os.Open(fn)
+	if err != nil {
+		fmt.Println("getAppHash", err)
+		return ""
+	}
+
+	defer f.Close()
+	md5hash := md5.New()
+	if _, err := io.Copy(md5hash, f); err != nil {
+		fmt.Println("getAppHash", err)
+		return ""
+	}
+
+	return fmt.Sprintf("%x", md5hash.Sum(nil))
+}
+
+func formatString(str string) string {
+	str = strings.Replace(str, " ", "", -1)
+	str = strings.Replace(str, "\n", "", -1)
+	str = strings.Replace(str, "\r", "", -1)
+	return str
 }
