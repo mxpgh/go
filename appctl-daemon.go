@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"crypto"
 	"crypto/md5"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/gob"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -20,9 +26,19 @@ import (
 	"time"
 )
 
+const publicKey string = `
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDEdXD28RmWo8rWJu2FleiAG6wV
+Gy6O0JH0achNiFuFyhf+5AQcA4KVXaJP5UmeLpYoRIR/Apm10HoE11mPSo/fIaFF
+biJc1FfksFBv3QmE4ecbTtpwv70P9lyr2pBVT4n+TL9Vxu+qLfbraUHA/MLh+csJ
+LILyqkMGP2KAQJhVgQIDAQAB
+-----END PUBLIC KEY-----
+`
+
 const version string = "1.00"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
+const defAppSignFile string = "sign.cfg"
 const defAppsFolder string = "/usr/local/apps"
 const defAppsExtFolder string = "/usr/local/extapps"
 
@@ -407,11 +423,11 @@ func handleAppInstall(ctl *taskCmd) {
 		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
 		return
 	}
-	cmd := exec.Command("/bin/bash", "-c", "tar -zxvf "+fn+" -C "+defAppsExtFolder)
+	cmd := exec.Command("/bin/sh", "-c", "tar -zxvf "+fn+" -C "+defAppsExtFolder)
 	out, err := cmd.CombinedOutput()
 	_ = out
 	if err != nil {
-		log.Printf("handleAppInstall: %s(%s)\n", string(out), err.Error())
+		log.Printf("handleAppInstall: %s(%s)\n", string(out), err)
 		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
 		return
 	}
@@ -630,9 +646,9 @@ func handleAppList(ctl *taskCmd) {
 			item.Enable = int8(v.Enable)
 			item.Status = int8(v.Status)
 			item.CpuThreshold = 90
-			item.CpuUsage = 0
+			item.CpuUsage = getAppCPU(v.Name, v.Pid)
 			item.MemThreshold = 90
-			item.MemUsage = 0
+			item.MemUsage = getAppMem(v.Name, v.Pid)
 			item.StartTime = v.StartTime
 			if ctl.req.Log == 1 {
 				item.LogsStartTime = v.LogStartTime
@@ -675,9 +691,9 @@ func handleAppList(ctl *taskCmd) {
 			item.Enable = int8(v.Enable)
 			item.Status = int8(v.Status)
 			item.CpuThreshold = 90
-			item.CpuUsage = 0
+			item.CpuUsage = getAppCPU(v.Name, v.Pid)
 			item.MemThreshold = 90
-			item.MemUsage = 0
+			item.MemUsage = getAppMem(v.Name, v.Pid)
 			item.StartTime = v.StartTime
 			if ctl.req.Log == 1 {
 				item.LogsStartTime = v.LogStartTime
@@ -691,9 +707,9 @@ func handleAppList(ctl *taskCmd) {
 		}
 		appitem := appItem{}
 		appitem.Index = 0
-		appitem.Name = ctl.req.Name
-		appitem.Version = getAppVersion(ctl.req.Name)
-		appitem.Hash = getAppHash(ctl.req.Name)
+		appitem.Name = mK
+		appitem.Version = getAppVersion(mK)
+		appitem.Hash = getAppHash(mK)
 		appitem.SrvTotal = int32(len(srvList))
 		appitem.SrvItems = srvList
 
@@ -757,11 +773,50 @@ func removeItem(item *taskItem) bool {
 	return false
 }
 
-func getAppCPU(name string) int {
-	return 0
+func getAppCPU(name string, pid int) int {
+	cmd := fmt.Sprintf("top -b -n1 | grep %s | grep -v grep | grep %d | awk '{print$9}'", name, pid)
+	log.Println("getAppCPU: cmd=", cmd)
+	ret := execBashCmd(cmd)
+	log.Println("getAppCPU ret=", ret)
+	f, err := strconv.ParseFloat(strings.TrimRight(ret, "%"), 32)
+	if err != nil {
+		return 0
+	}
+	log.Println("getAppCPU: ", int(f*100))
+	return int(f * 100)
 }
 
-func getAppMem(name string) int {
+func getAppMem(name string, pid int) int {
+	path := fmt.Sprintf("/proc/%d/status", pid)
+	fl, err := os.Open(path)
+	if err != nil {
+		log.Println("getAppMem 0x0001:", err)
+		return 0
+	}
+
+	defer fl.Close()
+	buf := bufio.NewReader(fl)
+	for {
+		line, err := buf.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return 0
+			}
+			return 0
+		}
+		line = strings.TrimSpace(line)
+		strArr := strings.Split(line, ":")
+		if strArr[0] == "VmRSS" {
+			log.Println("getAppMem: ", strArr[1])
+			mem, err := strconv.Atoi(strings.TrimSpace(strings.TrimRight(strArr[1], "kB")))
+			if err != nil {
+				log.Println("getAppMem error: ", err)
+				return 0
+			}
+			return mem
+		}
+	}
+
 	return 0
 }
 
@@ -808,4 +863,77 @@ func formatString(str string) string {
 	str = strings.Replace(str, "\n", "", -1)
 	str = strings.Replace(str, "\r", "", -1)
 	return str
+}
+
+func execBashCmd(bash string) string {
+	cmd := exec.Command("/bin/sh", "-c", bash)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func getAppHashBytes(name string) []byte {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, name)
+	f, err := os.Open(fn)
+	if err != nil {
+		log.Println("getAppHashBytes", err)
+		return nil
+	}
+
+	defer f.Close()
+	md5hash := md5.New()
+	if _, err := io.Copy(md5hash, f); err != nil {
+		log.Println("getAppHashBytes", err)
+		return nil
+	}
+	return md5hash.Sum(nil)
+}
+
+func getAppSign(name string) []byte {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, defAppSignFile)
+	fl, err := os.Open(fn)
+	if err != nil {
+		log.Println("getAppSign:", err)
+		return nil
+	}
+
+	defer fl.Close()
+	content, err := ioutil.ReadAll(fl)
+	if err != nil {
+		log.Println("getAppSign:", err)
+		return nil
+	}
+	return content
+}
+
+func rsaSignVerify(name string) bool {
+	data := getAppHashBytes(name)
+	hashed := sha256.Sum256(data)
+	block, _ := pem.Decode([]byte(publicKey))
+	if block == nil {
+		log.Println("rsaSignVerify: public key error")
+		return false
+	}
+	// 解析公钥
+	pubInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		log.Println("rsaSignVerify: parse public key error: ", err)
+		return false
+	}
+
+	signature := getAppSign(name)
+	// 类型断言
+	pub := pubInterface.(*rsa.PublicKey)
+	//验证签名
+	err = rsa.VerifyPKCS1v15(pub, crypto.SHA256, hashed[:], signature)
+	if err != nil {
+		log.Println("rsaSignVerify: verify sign error: ", err)
+		return false
+	}
+
+	return true
 }

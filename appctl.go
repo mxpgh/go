@@ -80,9 +80,9 @@ type appItem struct {
 
 func main() {
 	//log.Println("appctl version1.0.0")
-	len := len(os.Args)
-	if len < 2 {
-		fmt.Println("args less: len=", len)
+	l := len(os.Args)
+	if l < 2 {
+		fmt.Println("args less: len=", l)
 		return
 	}
 
@@ -131,6 +131,11 @@ func main() {
 	switch os.Args[1] {
 	case "-install":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_INSTALL
 			ctl.Name = os.Args[2]
@@ -138,6 +143,11 @@ func main() {
 		}
 	case "-start":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_START
 			ctl.Name = os.Args[2]
@@ -145,6 +155,11 @@ func main() {
 		}
 	case "-stop":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_STOP
 			ctl.Name = os.Args[2]
@@ -152,6 +167,11 @@ func main() {
 		}
 	case "-enable":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_ENABLE
 			ctl.Name = os.Args[2]
@@ -159,6 +179,12 @@ func main() {
 		}
 	case "-disable":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_DISABLE
 			ctl.Name = os.Args[2]
@@ -166,6 +192,12 @@ func main() {
 		}
 	case "-rm":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_RM
 			ctl.Name = os.Args[2]
@@ -175,10 +207,25 @@ func main() {
 		{
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_LIST
-			ctl.Name = os.Args[2]
-			if os.Args[3] == "-log" {
-				ctl.Log = 1
+			if len(os.Args) > 2 {
+				if os.Args[2] != "-log" {
+					ctl.Name = os.Args[2]
+					if len(os.Args) > 3 {
+						if os.Args[3] == "-log" {
+							ctl.Log = 1
+						} else {
+							ctl.Log = 0
+						}
+					} else {
+						ctl.Log = 0
+					}
+
+				} else {
+					ctl.Name = ""
+					ctl.Log = 1
+				}
 			} else {
+				ctl.Name = ""
 				ctl.Log = 0
 			}
 
@@ -186,6 +233,11 @@ func main() {
 		}
 	case "-version":
 		{
+			if len(os.Args) < 3 {
+				log.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
 			ctl := appCtlCmdReq{}
 			ctl.Cmd = APP_CTL_VERSION
 			ctl.Name = os.Args[2]
@@ -329,10 +381,10 @@ func handleAppList(rsp *appCtlCmdRsp) {
 				fmt.Printf("%-20s: stop\n", "Service status")
 			}
 
-			fmt.Printf("%-20s: %d\n", "Cpu threshold", t.CpuThreshold)
-			fmt.Printf("%-20s: %d\n", "Cpu usage", t.CpuUsage)
-			fmt.Printf("%-20s: %d\n", "Mem threshold", t.MemThreshold)
-			fmt.Printf("%-20s: %d\n", "Mem usage", t.MemUsage)
+			fmt.Printf("%-20s: %d%%\n", "Cpu threshold", t.CpuThreshold)
+			fmt.Printf("%-20s: %d%%\n", "Cpu usage", t.CpuUsage)
+			fmt.Printf("%-20s: %d%%\n", "Mem threshold", t.MemThreshold)
+			fmt.Printf("%-20s: %d kB\n", "Mem usage", t.MemUsage)
 			fmt.Printf("%-20s: %s\n", "Start time", time.Unix(t.StartTime, 0).Format("2006-01-02 15:04:05"))
 
 			if t.LogsStartTime != 0 {
