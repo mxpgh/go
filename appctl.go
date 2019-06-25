@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -32,18 +33,24 @@ const (
 	APP_CTL_RM
 	APP_CTL_LIST
 	APP_CTL_VERSION
+	APP_CTL_CONFIG_CPU
+	APP_CTL_CONFIG_MEM
+	APP_CTL_QUERY_CPU
+	APP_CTL_QUERY_MEM
 )
 
 const (
 	_ AppCmdType = iota
+	APP_STATUS_INSTALL
 	APP_STATUS_RUNNING
 	APP_STATUS_STOP
 )
 
 type appCtlCmdReq struct {
-	Cmd  AppCmdType
-	Name string
-	Log  int8
+	Cmd   AppCmdType
+	Name  string
+	Log   int8
+	Value int
 }
 type appCtlCmdRsp struct {
 	Cmd    AppCmdType
@@ -132,7 +139,7 @@ func main() {
 	case "-install":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -144,7 +151,7 @@ func main() {
 	case "-start":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -156,7 +163,7 @@ func main() {
 	case "-stop":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -168,7 +175,7 @@ func main() {
 	case "-enable":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -180,7 +187,7 @@ func main() {
 	case "-disable":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -193,7 +200,7 @@ func main() {
 	case "-rm":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -234,7 +241,7 @@ func main() {
 	case "-version":
 		{
 			if len(os.Args) < 3 {
-				log.Println("Command args error.")
+				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
@@ -243,8 +250,66 @@ func main() {
 			ctl.Name = os.Args[2]
 			writeUnixgram(&ctl)
 		}
+	case "-cpu":
+		{
+			if len(os.Args) < 3 {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_CONFIG_CPU
+			val, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Println("Command args value error.")
+				os.Exit(0)
+			} else {
+				ctl.Value = val
+			}
+			writeUnixgram(&ctl)
+		}
+	case "-mem":
+		{
+			if len(os.Args) < 3 {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_CONFIG_MEM
+			val, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Println("Command args value error.")
+				os.Exit(0)
+			} else {
+				ctl.Value = val
+			}
+			writeUnixgram(&ctl)
+		}
+	case "-query":
+		{
+			if len(os.Args) < 3 {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+			if os.Args[2] == "cpu" {
+				ctl := appCtlCmdReq{}
+				ctl.Cmd = APP_CTL_QUERY_CPU
+				writeUnixgram(&ctl)
+			} else if os.Args[2] == "mem" {
+				ctl := appCtlCmdReq{}
+				ctl.Cmd = APP_CTL_QUERY_MEM
+				writeUnixgram(&ctl)
+			} else {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+
+		}
 	default:
-		log.Println("Command args error.")
+		fmt.Println("Command args error.")
 		os.Exit(0)
 		return
 	}
@@ -285,24 +350,28 @@ func readUnixgram() {
 			} else {
 				fmt.Println(ctlRsp.Result)
 			}
+
 		case APP_CTL_START:
 			if 0 == ctlRsp.Code {
 
 			} else {
 				fmt.Println(ctlRsp.Result)
 			}
+
 		case APP_CTL_STOP:
 			if 0 == ctlRsp.Code {
 
 			} else {
 				fmt.Println(ctlRsp.Result)
 			}
+
 		case APP_CTL_ENABLE:
 			if 0 == ctlRsp.Code {
 
 			} else {
 				fmt.Println(ctlRsp.Result)
 			}
+
 		case APP_CTL_DISABLE:
 			if 0 == ctlRsp.Code {
 
@@ -316,17 +385,45 @@ func readUnixgram() {
 			} else {
 				fmt.Println(ctlRsp.Result)
 			}
+
 		case APP_CTL_LIST:
 			if 0 == ctlRsp.Code {
 				handleAppList(&ctlRsp)
 			} else {
 				fmt.Println(ctlRsp.Result)
 			}
+
 		case APP_CTL_VERSION:
 			if 0 == ctlRsp.Code {
 				fmt.Println(ctlRsp.Result)
 			} else {
 				//log.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_CONFIG_CPU:
+			if 0 == ctlRsp.Code {
+				//fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_CONFIG_MEM:
+			if 0 == ctlRsp.Code {
+				//fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+		case APP_CTL_QUERY_CPU:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+		case APP_CTL_QUERY_MEM:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
 			}
 		}
 		//fmt.Println("recv:", string(buf[:size]))
@@ -366,6 +463,10 @@ func handleAppList(rsp *appCtlCmdRsp) {
 
 		for i, t := range v.SrvItems {
 			_ = i
+			if t.Status == int8(APP_STATUS_INSTALL) {
+				continue
+			}
+
 			fmt.Printf("%-20s: %d\n", "Service index", t.Index)
 			fmt.Printf("%-20s: %s\n", "Service name", t.Name)
 

@@ -67,7 +67,7 @@ func main() {
 	}
 
 	if false == checkFileIsExist(*fn) {
-		fmt.Printf("%s File not exist.", fn)
+		fmt.Printf("%s File not exist.", *fn)
 		return
 	}
 
@@ -97,10 +97,10 @@ func main() {
 	if err != nil {
 		return
 	}
-	cmd := fmt.Sprintf("tar -zcvf %s%s.tar %s", *out, fl, gAppPackagePath)
+
+	cmd := fmt.Sprintf("cd %s && tar -zcvf %s%s.tar %s/", parentPath, *out, fl, fl)
 	fmt.Println("cmd: ", cmd)
 	execBashCmd(cmd)
-
 }
 
 func checkFileIsExist(filename string) bool {
