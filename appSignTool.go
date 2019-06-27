@@ -55,7 +55,7 @@ const defAppSignFile string = "sign.cfg"
 var gAppPackagePath string
 
 func main() {
-	defDir, _ := os.Getwd()
+	defDir := getCurrentPath()
 	fn := flag.String("f", "", "app-name absolute path")
 	ver := flag.String("v", "SV01.001", "app version")
 	out := flag.String("o", defDir, "output file path")
@@ -99,8 +99,38 @@ func main() {
 	}
 
 	cmd := fmt.Sprintf("cd %s && tar -zcvf %s%s.tar %s/", parentPath, *out, fl, fl)
-	fmt.Println("cmd: ", cmd)
+	//fmt.Println(cmd)
 	execBashCmd(cmd)
+}
+
+func getCurrentPath() string {
+	execPath, err := exec.LookPath(os.Args[0])
+	if err != nil {
+		return ""
+	}
+
+	// Is Symlink
+	fi, err := os.Lstat(execPath)
+	if err != nil {
+		return ""
+	}
+
+	if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
+		execPath, err = os.Readlink(execPath)
+		if err != nil {
+			return ""
+		}
+	}
+
+	execDir := filepath.Dir(execPath)
+	if execDir == "." {
+		execDir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+
+	return execDir + "/"
 }
 
 func checkFileIsExist(filename string) bool {
@@ -165,8 +195,14 @@ func copyFile(dstName, srcName string) (written int64, err error) {
 		return
 	}
 	defer src.Close()
-
-	dst, err := os.OpenFile(dstName, os.O_WRONLY|os.O_CREATE, 0777)
+	var fm os.FileMode
+	fi, err := os.Stat(srcName)
+	if err != nil {
+		fm = os.FileMode(0777)
+	} else {
+		fm = fi.Mode()
+	}
+	dst, err := os.OpenFile(dstName, os.O_WRONLY|os.O_CREATE, fm)
 	if err != nil {
 		return
 	}

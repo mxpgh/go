@@ -36,10 +36,11 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.02"
+const version string = "1.06"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
+const defAppEventFile string = "event.log"
 const defAppsFolder string = "/usr/local/apps"
 const defAppsExtFolder string = "/usr/local/extapps"
 const defCPUThreshold int = 90
@@ -77,14 +78,15 @@ const (
 )
 
 var (
-	gUnixAddr     *net.UnixAddr
-	gUnixConn     *net.UnixConn
-	gTaskChan     chan *taskCmd
-	gTaskList     []taskItem
-	gWaitTime     time.Duration
-	gTraceTime    time.Time
-	gCPUThreshold int
-	gMemThreshold int
+	gUnixAddr       *net.UnixAddr
+	gUnixConn       *net.UnixConn
+	gTaskChan       chan *taskCmd
+	gTaskList       []taskItem
+	gWaitTime       time.Duration
+	gTraceTime      time.Time
+	gCPUThreshold   int
+	gMemThreshold   int
+	gAppCurrentPath string
 )
 
 type appCtlCmdReq struct {
@@ -152,7 +154,8 @@ type taskCmd struct {
 }
 
 func main() {
-	log.Println("appctl-daemon version ", version)
+	gAppCurrentPath = getCurrentPath()
+	log.Printf("appctl-daemon version %s, path: %s\n", version, gAppCurrentPath)
 
 	gCPUThreshold = defCPUThreshold
 	gMemThreshold = defMemThreshold
@@ -231,7 +234,8 @@ func isAlive(pid int) bool {
 }
 
 func readFile() ([]byte, error) {
-	fl, err := os.Open(cfgFile)
+	path := filepath.Join(gAppCurrentPath, cfgFile)
+	fl, err := os.Open(path)
 	if err != nil {
 		log.Println("readFile 0x0001:", err)
 		return nil, err
@@ -254,7 +258,8 @@ func writeFile(lst *taskList) error {
 		return err
 	}
 
-	fd, err := os.OpenFile(cfgFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	path := filepath.Join(gAppCurrentPath, cfgFile)
+	fd, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Println("writeFile 0x0002:", err.Error())
 		return err
@@ -264,6 +269,21 @@ func writeFile(lst *taskList) error {
 	fd.Sync()
 
 	return nil
+}
+
+func writeAppEventLog(name string, format string, v ...interface{}) {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, defAppEventFile)
+	fd, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		log.Println("writeAppEventLog: ", err.Error())
+		return
+	}
+	defer fd.Close()
+
+	str := fmt.Sprintf(format, v)
+	fd.WriteString(time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05") + " " + str + "\n")
+	fd.Sync()
 }
 
 func loadAppList() {
@@ -278,6 +298,16 @@ func loadAppList() {
 		return
 	}
 	gTaskList = append(gTaskList, lst.Items...)
+	for k, v := range gTaskList {
+		_ = k
+		if v.Enable == 1 {
+			gTaskList[k].Cmd = int(APP_CMD_START)
+		} else {
+			gTaskList[k].Cmd = int(APP_CMD_STOP)
+		}
+		gCPUThreshold = v.CPUThreshold
+		gMemThreshold = v.MemThreshold
+	}
 }
 
 func findAppItem(name string) *taskItem {
@@ -299,6 +329,36 @@ func findAppList(name string) []taskItem {
 		}
 	}
 	return itemList
+}
+
+func getCurrentPath() string {
+	execPath, err := exec.LookPath(os.Args[0])
+	if err != nil {
+		return ""
+	}
+
+	// Is Symlink
+	fi, err := os.Lstat(execPath)
+	if err != nil {
+		return ""
+	}
+
+	if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
+		execPath, err = os.Readlink(execPath)
+		if err != nil {
+			return ""
+		}
+	}
+
+	execDir := filepath.Dir(execPath)
+	if execDir == "." {
+		execDir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+
+	return execDir
 }
 
 func handleTask() {
@@ -369,26 +429,30 @@ func checkApps() {
 		v.Param = ""
 		//log.Println(v.Path, ",", v.Param, ",", v.Pid)
 		if isAlive(v.Pid) {
-			ret, err := os.Readlink("/proc/" + strconv.Itoa(v.Pid) + "/exe")
-			if err == nil && ret == v.Path {
-				cpuRate := getAppCPUPercent(v.Name, v.Pid)
-				memRate := getAppMemPercent(v.Name, v.Pid)
-				if cpuRate > gCPUThreshold {
-					restartApp(k)
-					log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
-					continue
-				}
-				if memRate > gMemThreshold {
-					restartApp(k)
-					log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
-					continue
-				}
-
-				gTaskList[k].Status = int(APP_STATUS_RUNNING)
+			//ret, err := os.Readlink("/proc/" + strconv.Itoa(v.Pid) + "/comm")
+			//if err == nil && ret == v.Path {
+			cpuRate := getAppCPUPercent(v.Name, v.Pid)
+			memRate := getAppMemPercent(v.Name, v.Pid)
+			if cpuRate > gCPUThreshold {
+				restartApp(k)
+				writeAppEventLog(v.Name, "%s cpu usage rate: %d over threshold %d restart.", v.Name, v.Pid, cpuRate, gCPUThreshold)
+				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
 				continue
-			} else {
-				log.Println("checkApps 0x0001:", err, ",", v.Path)
 			}
+			if memRate > gMemThreshold {
+				restartApp(k)
+				writeAppEventLog(v.Name, "%s mem usage rate: %d over threshold %d restart.", v.Name, v.Pid, memRate, gMemThreshold)
+				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
+				continue
+			}
+
+			gTaskList[k].Status = int(APP_STATUS_RUNNING)
+			continue
+			//} else {
+			//	log.Println("checkApps 0x0001:", err, ",", v.Path)
+			//}
+		} else {
+			gTaskList[k].Status = int(APP_STATUS_STOP)
 		}
 
 		if v.Cmd == int(APP_CMD_START) {
@@ -413,9 +477,7 @@ func checkApps() {
 	}
 
 	if needUpd {
-		lst := taskList{}
-		lst.Items = append(lst.Items, gTaskList...)
-		writeFile(&lst)
+		writeAppInfoFile()
 	}
 
 	endTime := time.Now().UTC()
@@ -448,9 +510,7 @@ func restartApp(idx int) error {
 		gTaskList[idx].LogEndTime = time.Now().Unix()
 		log.Println("restartApp start name =", gTaskList[idx].Name, ", path =", gTaskList[idx].Path, ", pid =", gTaskList[idx].Pid)
 
-		lst := taskList{}
-		lst.Items = append(lst.Items, gTaskList...)
-		writeFile(&lst)
+		writeAppInfoFile()
 		return nil
 	}
 
@@ -523,7 +583,7 @@ func handleAppInstall(ctl *taskCmd) {
 	_ = out
 	if err != nil {
 		log.Printf("handleAppInstall: %s(%s)\n", string(out), err)
-		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		writeCtlSimpleRsp(ctl, 1, "Install decompress failed.")
 		return
 	}
 
@@ -542,18 +602,22 @@ func handleAppInstall(ctl *taskCmd) {
 	if item == nil {
 		item := taskItem{}
 		item.Name = appName
+		item.Pid = 0
 		path := filepath.Join(defAppsExtFolder, appName)
 		item.Path = filepath.Join(path, appName)
 		item.Cmd = int(APP_CMD_STOP)
 		item.Enable = 1
 		item.Status = int(APP_STATUS_INSTALL)
-		item.CPUThreshold = defCPUThreshold
-		item.MemThreshold = defMemThreshold
+		item.CPUThreshold = gCPUThreshold
+		item.MemThreshold = gMemThreshold
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
 		gTaskList = append(gTaskList, item)
+
+		writeAppInfoFile()
 	}
 	writeCtlSimpleRsp(ctl, 0, "Success.")
+	writeAppEventLog(appName, "install %s success.", ctl.req.Name)
 }
 
 func handleAppStart(ctl *taskCmd) {
@@ -579,8 +643,11 @@ func handleAppStart(ctl *taskCmd) {
 			err := startApp(item)
 			if err != nil {
 				writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+				writeAppEventLog(item.Name, "start %s operation failed.", item.Name)
 			} else {
+				writeAppInfoFile()
 				writeCtlSimpleRsp(ctl, 0, "Success.")
+				writeAppEventLog(item.Name, "start %s success.", item.Name)
 			}
 		} else {
 			writeCtlSimpleRsp(ctl, 0, "Success.")
@@ -588,17 +655,21 @@ func handleAppStart(ctl *taskCmd) {
 	} else {
 		item := taskItem{}
 		item.Name = ctl.req.Name
+		item.Pid = 0
 		item.Path = fn
 		item.Cmd = int(APP_CMD_START)
-		item.Enable = 1
-		item.CPUThreshold = defCPUThreshold
-		item.MemThreshold = defMemThreshold
+		item.CPUThreshold = gCPUThreshold
+		item.MemThreshold = gMemThreshold
 		err := startApp(&item)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+			writeAppEventLog(item.Name, "start %s operation failed.", item.Name)
 		} else {
 			gTaskList = append(gTaskList, item)
+
+			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
+			writeAppEventLog(item.Name, "start %s success.", item.Name)
 		}
 	}
 }
@@ -617,12 +688,17 @@ func handleAppStop(ctl *taskCmd) {
 	if item != nil {
 		item.Cmd = int(APP_CMD_STOP)
 		item.LogEndTime = time.Now().Unix()
-		err := syscall.Kill(item.Pid, 9)
+		err := syscall.Kill(item.Pid, syscall.SIGKILL)
+		log.Printf("handleAppStop: app=%s, pid=%d\n", item.Name, item.Pid)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+			writeAppEventLog(item.Name, "stop %s operation failed.", item.Name)
 		} else {
+			item.Pid = 0
 			item.Status = int(APP_STATUS_STOP)
+			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
+			writeAppEventLog(item.Name, "stop %s success.", item.Name)
 		}
 
 	} else {
@@ -630,14 +706,16 @@ func handleAppStop(ctl *taskCmd) {
 		item.Name = ctl.req.Name
 		item.Path = fn
 		item.Cmd = int(APP_CMD_STOP)
+		item.Pid = 0
 		item.Status = int(APP_STATUS_STOP)
-		item.Enable = 1
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
-		item.CPUThreshold = defCPUThreshold
-		item.MemThreshold = defMemThreshold
+		item.CPUThreshold = gCPUThreshold
+		item.MemThreshold = gMemThreshold
 		gTaskList = append(gTaskList, item)
+		writeAppInfoFile()
 		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		writeAppEventLog(item.Name, "stop %s operation failed.", item.Name)
 	}
 }
 
@@ -655,26 +733,35 @@ func handleAppEnable(ctl *taskCmd) {
 	if item != nil {
 		item.Enable = 1
 		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
 	} else {
 		item := taskItem{}
 		item.Name = ctl.req.Name
+		item.Pid = 0
 		item.Path = fn
 		item.Enable = 1
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
-		item.CPUThreshold = defCPUThreshold
-		item.MemThreshold = defMemThreshold
+		item.CPUThreshold = gCPUThreshold
+		item.MemThreshold = gMemThreshold
 		gTaskList = append(gTaskList, item)
+
+		writeAppInfoFile()
 	}
 
-	oldMask := syscall.Umask(0)
-	err := os.Chmod(fn, 0755)
-	syscall.Umask(oldMask)
-	if err != nil {
-		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-	} else {
-		writeCtlSimpleRsp(ctl, 0, "Success.")
-	}
+	writeCtlSimpleRsp(ctl, 0, "Success.")
+	writeAppEventLog(item.Name, "enable %s success.", item.Name)
+
+	/*
+		oldMask := syscall.Umask(0)
+		err := os.Chmod(fn, 0755)
+		syscall.Umask(oldMask)
+		if err != nil {
+			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		} else {
+			writeCtlSimpleRsp(ctl, 0, "Success.")
+		}
+	*/
 }
 
 func handleAppDisable(ctl *taskCmd) {
@@ -691,26 +778,34 @@ func handleAppDisable(ctl *taskCmd) {
 	if item != nil {
 		item.Enable = 0
 		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
 	} else {
 		item := taskItem{}
 		item.Name = ctl.req.Name
+		item.Pid = 0
 		item.Path = fn
 		item.Enable = 0
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
-		item.CPUThreshold = defCPUThreshold
-		item.MemThreshold = defMemThreshold
+		item.CPUThreshold = gCPUThreshold
+		item.MemThreshold = gMemThreshold
 		gTaskList = append(gTaskList, item)
+		writeAppInfoFile()
 	}
 
-	oldMask := syscall.Umask(0)
-	err := os.Chmod(fn, 0644)
-	syscall.Umask(oldMask)
-	if err != nil {
-		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-	} else {
-		writeCtlSimpleRsp(ctl, 0, "Success.")
-	}
+	writeCtlSimpleRsp(ctl, 0, "Success.")
+	writeAppEventLog(item.Name, "disable %s success.", item.Name)
+
+	/*
+		oldMask := syscall.Umask(0)
+		err := os.Chmod(fn, 0644)
+		syscall.Umask(oldMask)
+		if err != nil {
+			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		} else {
+			writeCtlSimpleRsp(ctl, 0, "Success.")
+		}
+	*/
 }
 
 func handleAppRM(ctl *taskCmd) {
@@ -739,12 +834,15 @@ func handleAppRM(ctl *taskCmd) {
 	if err != nil {
 		code = 1
 		ret = "Operation failed."
+		writeAppEventLog(item.Name, "unstall %s operation failed.", item.Name)
 	} else {
 		code = 0
 		ret = "Success."
+		writeAppEventLog(item.Name, "unstall %s success.", item.Name)
 	}
 
 	removeItem(item)
+	writeAppInfoFile()
 	writeCtlSimpleRsp(ctl, code, ret)
 }
 
@@ -934,6 +1032,9 @@ func removeItem(item *taskItem) bool {
 }
 
 func getAppCPUPercent(name string, pid int) int {
+	if pid < 1 {
+		return 0
+	}
 	cmd := fmt.Sprintf("top -b -n1 | grep %s | grep -v grep | grep %d | awk '{print$8}'", name, pid)
 	//log.Println("getAppCPUPercent: cmd=", cmd)
 	ret := execBashCmd(cmd)
@@ -947,6 +1048,9 @@ func getAppCPUPercent(name string, pid int) int {
 }
 
 func getAppMemPercent(name string, pid int) int {
+	if pid < 1 {
+		return 0
+	}
 	cmd := fmt.Sprintf("top -b -n1 | grep %s | grep -v grep | grep %d | awk '{print$6}'", name, pid)
 	//log.Println("getAppMemPercent: cmd=", cmd)
 	ret := execBashCmd(cmd)
@@ -960,6 +1064,9 @@ func getAppMemPercent(name string, pid int) int {
 }
 
 func getAppMem(name string, pid int) int {
+	if pid < 1 {
+		return 0
+	}
 	path := fmt.Sprintf("/proc/%d/status", pid)
 	fl, err := os.Open(path)
 	if err != nil {
@@ -1112,4 +1219,10 @@ func rsaSignVerify(name string) bool {
 	}
 
 	return true
+}
+
+func writeAppInfoFile() {
+	lst := taskList{}
+	lst.Items = append(lst.Items, gTaskList...)
+	writeFile(&lst)
 }
