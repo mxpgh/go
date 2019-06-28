@@ -237,14 +237,14 @@ func readFile() ([]byte, error) {
 	path := filepath.Join(gAppCurrentPath, cfgFile)
 	fl, err := os.Open(path)
 	if err != nil {
-		log.Println("readFile 0x0001:", err)
+		log.Println("readFile open:", err)
 		return nil, err
 	}
 
 	defer fl.Close()
 	content, err := ioutil.ReadAll(fl)
 	if err != nil {
-		log.Println("readFile 0x0002:", err)
+		log.Println("readFile readall:", err)
 		return nil, err
 	}
 
@@ -254,14 +254,14 @@ func readFile() ([]byte, error) {
 func writeFile(lst *taskList) error {
 	data, err := json.Marshal(&lst)
 	if err != nil {
-		log.Println("writeFile 0x0001:", err)
+		log.Println("writeFile masshal error:", err)
 		return err
 	}
 
 	path := filepath.Join(gAppCurrentPath, cfgFile)
 	fd, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		log.Println("writeFile 0x0002:", err.Error())
+		log.Println("writeFile openfile error:", err.Error())
 		return err
 	}
 	defer fd.Close()
@@ -281,9 +281,37 @@ func writeAppEventLog(name string, format string, v ...interface{}) {
 	}
 	defer fd.Close()
 
-	str := fmt.Sprintf(format, v)
+	str := fmt.Sprintf(format, v...)
 	fd.WriteString(time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05") + " " + str + "\n")
 	fd.Sync()
+}
+
+func readAppEventLog(name string) []string {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, defAppEventFile)
+	fl, err := os.Open(fn)
+	if err != nil {
+		log.Println("readAppEventLog open:", err)
+		return nil, err
+	}
+
+	defer fl.Close()
+
+	var strArray []string
+	buf := bufio.NewReader(fl)
+	for {
+		line, err := buf.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			break
+		}
+		line = strings.TrimSpace(line)
+		strArray = append(strArray, line)
+	}
+
+	return strArray
 }
 
 func loadAppList() {
