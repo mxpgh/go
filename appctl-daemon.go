@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.07"
+const version string = "1.08"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -408,7 +408,7 @@ func getCurrentPath() string {
 func handleTask() {
 	loadAppList()
 
-	gWaitTime = 5 * time.Second
+	gWaitTime = 5 * 60 * time.Second
 	gTraceTime = time.Now().UTC()
 
 	for {
@@ -482,13 +482,13 @@ func checkApps() {
 			memRate := getAppMemPercent(v.Name, v.Pid)
 			if cpuRate > gCPUThreshold {
 				restartApp(k)
-				writeAppEventLog(&gTaskList[k], "%s cpu usage rate: %d over threshold %d restart.", v.Name, v.Pid, cpuRate, gCPUThreshold)
+				writeAppEventLog(&gTaskList[k], "%s cpu usage rate: %d over threshold %d restart.", v.Name, cpuRate, gCPUThreshold)
 				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
 				continue
 			}
 			if memRate > gMemThreshold {
 				restartApp(k)
-				writeAppEventLog(&gTaskList[k], "%s mem usage rate: %d over threshold %d restart.", v.Name, v.Pid, memRate, gMemThreshold)
+				writeAppEventLog(&gTaskList[k], "%s mem usage rate: %d over threshold %d restart.", v.Name, memRate, gMemThreshold)
 				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
 				continue
 			}
