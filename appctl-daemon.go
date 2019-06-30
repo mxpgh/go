@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.06"
+const version string = "1.07"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -62,6 +62,7 @@ const (
 	APP_CTL_CONFIG_MEM
 	APP_CTL_QUERY_CPU
 	APP_CTL_QUERY_MEM
+	APP_CTL_LOGS
 )
 
 const (
@@ -127,6 +128,7 @@ type appItem struct {
 
 	SrvTotal int32
 	SrvItems []srvItem
+	LogItems []string
 }
 
 type taskItem struct {
@@ -142,6 +144,7 @@ type taskItem struct {
 	CPUThreshold int    `json:"cputhreshold"`
 	MemThreshold int    `json:"memthreshold"`
 	Param        string `json:"param"`
+	LogFile      string `json:"logfile"`
 }
 
 type taskList struct {
@@ -271,8 +274,12 @@ func writeFile(lst *taskList) error {
 	return nil
 }
 
-func writeAppEventLog(name string, format string, v ...interface{}) {
-	path := filepath.Join(defAppsExtFolder, name)
+func writeAppEventLog(item *taskItem, format string, v ...interface{}) {
+	if item == nil {
+		log.Println("writeAppEventLog: item nil")
+		return
+	}
+	path := filepath.Join(defAppsExtFolder, item.Name)
 	fn := filepath.Join(path, defAppEventFile)
 	fd, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
@@ -281,9 +288,11 @@ func writeAppEventLog(name string, format string, v ...interface{}) {
 	}
 	defer fd.Close()
 
+	item.LogFile = fn
 	str := fmt.Sprintf(format, v...)
 	fd.WriteString(time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05") + " " + str + "\n")
 	fd.Sync()
+
 }
 
 func readAppEventLog(name string) []string {
@@ -292,7 +301,7 @@ func readAppEventLog(name string) []string {
 	fl, err := os.Open(fn)
 	if err != nil {
 		log.Println("readAppEventLog open:", err)
-		return nil, err
+		return nil
 	}
 
 	defer fl.Close()
@@ -311,7 +320,14 @@ func readAppEventLog(name string) []string {
 		strArray = append(strArray, line)
 	}
 
-	return strArray
+	arrLen := len(strArray)
+	retPos := 0
+	if arrLen > 100 {
+		retPos = arrLen - 100
+	} else {
+		retPos = 0
+	}
+	return strArray[retPos:]
 }
 
 func loadAppList() {
@@ -438,6 +454,9 @@ func handleTask() {
 
 					case APP_CTL_QUERY_MEM:
 						handleAppQueryMem(ctlReq)
+
+					case APP_CTL_LOGS:
+						handleAppLogs(ctlReq)
 					}
 				}
 			}
@@ -463,13 +482,13 @@ func checkApps() {
 			memRate := getAppMemPercent(v.Name, v.Pid)
 			if cpuRate > gCPUThreshold {
 				restartApp(k)
-				writeAppEventLog(v.Name, "%s cpu usage rate: %d over threshold %d restart.", v.Name, v.Pid, cpuRate, gCPUThreshold)
+				writeAppEventLog(&gTaskList[k], "%s cpu usage rate: %d over threshold %d restart.", v.Name, v.Pid, cpuRate, gCPUThreshold)
 				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
 				continue
 			}
 			if memRate > gMemThreshold {
 				restartApp(k)
-				writeAppEventLog(v.Name, "%s mem usage rate: %d over threshold %d restart.", v.Name, v.Pid, memRate, gMemThreshold)
+				writeAppEventLog(&gTaskList[k], "%s mem usage rate: %d over threshold %d restart.", v.Name, v.Pid, memRate, gMemThreshold)
 				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
 				continue
 			}
@@ -480,7 +499,9 @@ func checkApps() {
 			//	log.Println("checkApps 0x0001:", err, ",", v.Path)
 			//}
 		} else {
-			gTaskList[k].Status = int(APP_STATUS_STOP)
+			if v.Status == int(APP_STATUS_RUNNING) {
+				gTaskList[k].Status = int(APP_STATUS_STOP)
+			}
 		}
 
 		if v.Cmd == int(APP_CMD_START) {
@@ -626,9 +647,10 @@ func handleAppInstall(ctl *taskCmd) {
 		writeCtlSimpleRsp(ctl, 1, "Verify file sign failed.")
 		return
 	}
-	item := findAppItem(appName)
+	var item *taskItem
+	item = findAppItem(appName)
 	if item == nil {
-		item := taskItem{}
+		item = &taskItem{}
 		item.Name = appName
 		item.Pid = 0
 		path := filepath.Join(defAppsExtFolder, appName)
@@ -640,12 +662,14 @@ func handleAppInstall(ctl *taskCmd) {
 		item.MemThreshold = gMemThreshold
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
-		gTaskList = append(gTaskList, item)
+
+		writeAppEventLog(item, "install %s success.", ctl.req.Name)
+		gTaskList = append(gTaskList, *item)
 
 		writeAppInfoFile()
 	}
 	writeCtlSimpleRsp(ctl, 0, "Success.")
-	writeAppEventLog(appName, "install %s success.", ctl.req.Name)
+
 }
 
 func handleAppStart(ctl *taskCmd) {
@@ -671,11 +695,11 @@ func handleAppStart(ctl *taskCmd) {
 			err := startApp(item)
 			if err != nil {
 				writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-				writeAppEventLog(item.Name, "start %s operation failed.", item.Name)
+				writeAppEventLog(item, "start %s operation failed.", item.Name)
 			} else {
 				writeAppInfoFile()
 				writeCtlSimpleRsp(ctl, 0, "Success.")
-				writeAppEventLog(item.Name, "start %s success.", item.Name)
+				writeAppEventLog(item, "start %s success.", item.Name)
 			}
 		} else {
 			writeCtlSimpleRsp(ctl, 0, "Success.")
@@ -691,13 +715,13 @@ func handleAppStart(ctl *taskCmd) {
 		err := startApp(&item)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-			writeAppEventLog(item.Name, "start %s operation failed.", item.Name)
+			writeAppEventLog(&item, "start %s operation failed.", item.Name)
 		} else {
 			gTaskList = append(gTaskList, item)
 
 			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
-			writeAppEventLog(item.Name, "start %s success.", item.Name)
+			writeAppEventLog(&item, "start %s success.", item.Name)
 		}
 	}
 }
@@ -720,13 +744,13 @@ func handleAppStop(ctl *taskCmd) {
 		log.Printf("handleAppStop: app=%s, pid=%d\n", item.Name, item.Pid)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-			writeAppEventLog(item.Name, "stop %s operation failed.", item.Name)
+			writeAppEventLog(item, "stop %s operation failed.", item.Name)
 		} else {
 			item.Pid = 0
 			item.Status = int(APP_STATUS_STOP)
 			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
-			writeAppEventLog(item.Name, "stop %s success.", item.Name)
+			writeAppEventLog(item, "stop %s success.", item.Name)
 		}
 
 	} else {
@@ -743,7 +767,7 @@ func handleAppStop(ctl *taskCmd) {
 		gTaskList = append(gTaskList, item)
 		writeAppInfoFile()
 		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-		writeAppEventLog(item.Name, "stop %s operation failed.", item.Name)
+		writeAppEventLog(&item, "stop %s operation failed.", item.Name)
 	}
 }
 
@@ -757,13 +781,14 @@ func handleAppEnable(ctl *taskCmd) {
 		return
 	}
 
-	item := findAppItem(ctl.req.Name)
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
 	if item != nil {
 		item.Enable = 1
 		item.LogEndTime = time.Now().Unix()
 		writeAppInfoFile()
 	} else {
-		item := taskItem{}
+		item = &taskItem{}
 		item.Name = ctl.req.Name
 		item.Pid = 0
 		item.Path = fn
@@ -772,13 +797,13 @@ func handleAppEnable(ctl *taskCmd) {
 		item.LogEndTime = time.Now().Unix()
 		item.CPUThreshold = gCPUThreshold
 		item.MemThreshold = gMemThreshold
-		gTaskList = append(gTaskList, item)
+		gTaskList = append(gTaskList, *item)
 
 		writeAppInfoFile()
 	}
 
 	writeCtlSimpleRsp(ctl, 0, "Success.")
-	writeAppEventLog(item.Name, "enable %s success.", item.Name)
+	writeAppEventLog(item, "enable %s success.", item.Name)
 
 	/*
 		oldMask := syscall.Umask(0)
@@ -802,13 +827,14 @@ func handleAppDisable(ctl *taskCmd) {
 		return
 	}
 
-	item := findAppItem(ctl.req.Name)
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
 	if item != nil {
 		item.Enable = 0
 		item.LogEndTime = time.Now().Unix()
 		writeAppInfoFile()
 	} else {
-		item := taskItem{}
+		item = &taskItem{}
 		item.Name = ctl.req.Name
 		item.Pid = 0
 		item.Path = fn
@@ -817,12 +843,12 @@ func handleAppDisable(ctl *taskCmd) {
 		item.LogEndTime = time.Now().Unix()
 		item.CPUThreshold = gCPUThreshold
 		item.MemThreshold = gMemThreshold
-		gTaskList = append(gTaskList, item)
+		gTaskList = append(gTaskList, *item)
 		writeAppInfoFile()
 	}
 
 	writeCtlSimpleRsp(ctl, 0, "Success.")
-	writeAppEventLog(item.Name, "disable %s success.", item.Name)
+	writeAppEventLog(item, "disable %s success.", item.Name)
 
 	/*
 		oldMask := syscall.Umask(0)
@@ -862,11 +888,11 @@ func handleAppRM(ctl *taskCmd) {
 	if err != nil {
 		code = 1
 		ret = "Operation failed."
-		writeAppEventLog(item.Name, "unstall %s operation failed.", item.Name)
+		writeAppEventLog(item, "unstall %s operation failed.", item.Name)
 	} else {
 		code = 0
 		ret = "Success."
-		writeAppEventLog(item.Name, "unstall %s success.", item.Name)
+		writeAppEventLog(item, "unstall %s success.", item.Name)
 	}
 
 	removeItem(item)
@@ -898,6 +924,12 @@ func handleAppList(ctl *taskCmd) {
 		rsp.Result = "Success."
 		rsp.Total = int32(len(appMap))
 
+		appitem := appItem{}
+		appitem.Index = 0
+		appitem.Name = ctl.req.Name
+		appitem.Version = getAppVersion(ctl.req.Name)
+		appitem.Hash = getAppHash(ctl.req.Name)
+
 		var srvList []srvItem
 		itemList := findAppList(ctl.req.Name)
 		for k, v := range itemList {
@@ -912,21 +944,15 @@ func handleAppList(ctl *taskCmd) {
 			item.MemThreshold = gMemThreshold
 			item.MemUsage = getAppMem(v.Name, v.Pid)
 			item.StartTime = v.StartTime
+			item.LogsStartTime = 0
+			item.LogsEndTime = 0
 			if ctl.req.Log == 1 {
-				item.LogsStartTime = v.LogStartTime
-				item.LogsEndTime = v.LogEndTime
-			} else {
-				item.LogsStartTime = 0
-				item.LogsEndTime = 0
+				appitem.LogItems = readAppEventLog(ctl.req.Name)
 			}
 
 			srvList = append(srvList, item)
 		}
-		appitem := appItem{}
-		appitem.Index = 0
-		appitem.Name = ctl.req.Name
-		appitem.Version = getAppVersion(ctl.req.Name)
-		appitem.Hash = getAppHash(ctl.req.Name)
+
 		appitem.SrvTotal = int32(len(srvList))
 		appitem.SrvItems = srvList
 
@@ -1014,6 +1040,18 @@ func handleAppQueryMem(ctl *taskCmd) {
 	writeCtlSimpleRsp(ctl, 0, ret)
 }
 
+func handleAppLogs(ctl *taskCmd) {
+	log.Println("handleAppLogs:")
+
+	var ret string
+	for k, v := range gTaskList {
+		_ = k
+		ret += fmt.Sprintf("%s\n", v.LogFile)
+	}
+
+	writeCtlSimpleRsp(ctl, 0, ret)
+}
+
 func writeCtlSimpleRsp(ctl *taskCmd, code int16, ret string) {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
@@ -1050,6 +1088,9 @@ func writeCtlRsp(rsp *appCtlCmdRsp, remote *net.UnixAddr) {
 }
 
 func removeItem(item *taskItem) bool {
+	if item == nil {
+		return false
+	}
 	for i := 0; i < len(gTaskList); i++ {
 		if gTaskList[i].Name == item.Name {
 			gTaskList = append(gTaskList[:i], gTaskList[i+1:]...)

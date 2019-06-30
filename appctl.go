@@ -37,6 +37,7 @@ const (
 	APP_CTL_CONFIG_MEM
 	APP_CTL_QUERY_CPU
 	APP_CTL_QUERY_MEM
+	APP_CTL_LOGS
 )
 
 const (
@@ -83,6 +84,7 @@ type appItem struct {
 
 	SrvTotal int32
 	SrvItems []srvItem
+	LogItems []string
 }
 
 func main() {
@@ -306,7 +308,23 @@ func main() {
 				os.Exit(0)
 				return
 			}
-
+		}
+	case "-logs":
+		{
+			if len(os.Args) < 3 {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+			if os.Args[2] == "files" {
+				ctl := appCtlCmdReq{}
+				ctl.Cmd = APP_CTL_LOGS
+				writeUnixgram(&ctl)
+			} else {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
 		}
 	default:
 		fmt.Println("Command args error.")
@@ -425,6 +443,12 @@ func readUnixgram() {
 			} else {
 				log.Println(ctlRsp.Result)
 			}
+		case APP_CTL_LOGS:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
 		}
 		//fmt.Println("recv:", string(buf[:size]))
 		break
@@ -493,6 +517,11 @@ func handleAppList(rsp *appCtlCmdRsp) {
 			}
 
 			fmt.Printf("\n")
+		}
+
+		for logK, logV := range v.LogItems {
+			_ = logK
+			fmt.Printf("%s\n", logV)
 		}
 	}
 }
