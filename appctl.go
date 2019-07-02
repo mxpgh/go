@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -84,7 +87,7 @@ type appItem struct {
 
 	SrvTotal int32
 	SrvItems []srvItem
-	LogItems []string
+	LogFile  string
 }
 
 func main() {
@@ -475,7 +478,41 @@ func writeUnixgram(req *appCtlCmdReq) {
 	}
 }
 
+func readAppEventLog(fn string) []string {
+	fl, err := os.Open(fn)
+	if err != nil {
+		//log.Println("readAppEventLog open:", err)
+		return nil
+	}
+
+	defer fl.Close()
+
+	var strArray []string
+	buf := bufio.NewReader(fl)
+	for {
+		line, err := buf.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			break
+		}
+		line = strings.TrimSpace(line)
+		strArray = append(strArray, line)
+	}
+
+	arrLen := len(strArray)
+	retPos := 0
+	if arrLen > 100 {
+		retPos = arrLen - 100
+	} else {
+		retPos = 0
+	}
+	return strArray[retPos:]
+}
+
 func handleAppList(rsp *appCtlCmdRsp) {
+	bHaveEnter := false
 	fmt.Printf("Total app number %d \n\n", rsp.Total)
 
 	for k, v := range rsp.Items {
@@ -517,11 +554,20 @@ func handleAppList(rsp *appCtlCmdRsp) {
 			}
 
 			fmt.Printf("\n")
+			bHaveEnter = true
 		}
 
-		for logK, logV := range v.LogItems {
-			_ = logK
-			fmt.Printf("%s\n", logV)
+		if len(v.LogFile) > 0 {
+			strLogs := readAppEventLog(v.LogFile)
+			for logK, logV := range strLogs {
+				_ = logK
+				fmt.Printf("%s\n", logV)
+				bHaveEnter = true
+			}
 		}
+	}
+
+	if !bHaveEnter {
+		fmt.Printf("\n")
 	}
 }

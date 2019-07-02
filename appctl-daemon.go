@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.08"
+const version string = "1.10"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -128,7 +128,7 @@ type appItem struct {
 
 	SrvTotal int32
 	SrvItems []srvItem
-	LogItems []string
+	LogFile  string
 }
 
 type taskItem struct {
@@ -328,6 +328,12 @@ func readAppEventLog(name string) []string {
 		retPos = 0
 	}
 	return strArray[retPos:]
+}
+
+func getAppEventLogFile(name string) string {
+	path := filepath.Join(defAppsExtFolder, name)
+	fn := filepath.Join(path, defAppEventFile)
+	return fn
 }
 
 func loadAppList() {
@@ -947,7 +953,7 @@ func handleAppList(ctl *taskCmd) {
 			item.LogsStartTime = 0
 			item.LogsEndTime = 0
 			if ctl.req.Log == 1 {
-				appitem.LogItems = readAppEventLog(ctl.req.Name)
+				appitem.LogFile = getAppEventLogFile(v.Name)
 			}
 
 			srvList = append(srvList, item)
@@ -968,6 +974,7 @@ func handleAppList(ctl *taskCmd) {
 	rsp.Result = "Success."
 	rsp.Total = int32(len(appMap))
 
+	idx := int32(0)
 	for mK, mV := range appMap {
 		_ = mK
 		var srvList []srvItem
@@ -994,7 +1001,7 @@ func handleAppList(ctl *taskCmd) {
 			srvList = append(srvList, item)
 		}
 		appitem := appItem{}
-		appitem.Index = 0
+		appitem.Index = idx
 		appitem.Name = mK
 		appitem.Version = getAppVersion(mK)
 		appitem.Hash = getAppHash(mK)
@@ -1002,6 +1009,7 @@ func handleAppList(ctl *taskCmd) {
 		appitem.SrvItems = srvList
 
 		rsp.Items = append(rsp.Items, appitem)
+		idx = idx + 1
 	}
 
 	writeCtlRsp(rsp, ctl.remote)
@@ -1112,8 +1120,8 @@ func getAppCPUPercent(name string, pid int) int {
 	if err != nil {
 		return 0
 	}
-	//log.Println("getAppCPUPercent: ", int(f*100))
-	return int(f * 100)
+	//log.Println("getAppCPUPercent: ", int(f))
+	return int(f)
 }
 
 func getAppMemPercent(name string, pid int) int {
@@ -1128,8 +1136,8 @@ func getAppMemPercent(name string, pid int) int {
 	if err != nil {
 		return 0
 	}
-	//log.Println("getAppMemPercent: ", int(f*100))
-	return int(f * 100)
+	//log.Println("getAppMemPercent: ", int(f))
+	return int(f)
 }
 
 func getAppMem(name string, pid int) int {
