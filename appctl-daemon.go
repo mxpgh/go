@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.10"
+const version string = "1.13"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -148,7 +148,9 @@ type taskItem struct {
 }
 
 type taskList struct {
-	Items []taskItem `json:"items"`
+	CPUThreshold int        `json:"cputhreshold"`
+	MemThreshold int        `json:"memthreshold"`
+	Items        []taskItem `json:"items"`
 }
 
 type taskCmd struct {
@@ -210,10 +212,13 @@ func main() {
 		os.Exit(0)
 	}(sig)
 
-	gTaskChan = make(chan *taskCmd, 100)
+	gTaskChan = make(chan *taskCmd, 50)
+
+	loadAppList()
 	go handleTask()
 	go readUnixgram()
 
+	log.Println("appctl-daemon start service")
 	select {}
 }
 
@@ -255,6 +260,9 @@ func readFile() ([]byte, error) {
 }
 
 func writeFile(lst *taskList) error {
+	lst.CPUThreshold = gCPUThreshold
+	lst.MemThreshold = gMemThreshold
+
 	data, err := json.Marshal(&lst)
 	if err != nil {
 		log.Println("writeFile masshal error:", err)
@@ -347,6 +355,9 @@ func loadAppList() {
 		log.Println("loadAppList: ", err)
 		return
 	}
+
+	gCPUThreshold = lst.CPUThreshold
+	gMemThreshold = lst.MemThreshold
 	gTaskList = append(gTaskList, lst.Items...)
 	for k, v := range gTaskList {
 		_ = k
@@ -355,9 +366,9 @@ func loadAppList() {
 		} else {
 			gTaskList[k].Cmd = int(APP_CMD_STOP)
 		}
-		gCPUThreshold = v.CPUThreshold
-		gMemThreshold = v.MemThreshold
 	}
+
+	log.Printf("loadAppList: CPUThreshold=%d, MemThreshold=%d\n", gCPUThreshold, gMemThreshold)
 }
 
 func findAppItem(name string) *taskItem {
@@ -412,8 +423,6 @@ func getCurrentPath() string {
 }
 
 func handleTask() {
-	loadAppList()
-
 	gWaitTime = 5 * 60 * time.Second
 	gTraceTime = time.Now().UTC()
 
@@ -488,13 +497,13 @@ func checkApps() {
 			memRate := getAppMemPercent(v.Name, v.Pid)
 			if cpuRate > gCPUThreshold {
 				restartApp(k)
-				writeAppEventLog(&gTaskList[k], "%s cpu usage rate: %d over threshold %d restart.", v.Name, cpuRate, gCPUThreshold)
+				writeAppEventLog(&gTaskList[k], "restart %s cpu usage rate: %d over threshold %d restart.", v.Name, cpuRate, gCPUThreshold)
 				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
 				continue
 			}
 			if memRate > gMemThreshold {
 				restartApp(k)
-				writeAppEventLog(&gTaskList[k], "%s mem usage rate: %d over threshold %d restart.", v.Name, memRate, gMemThreshold)
+				writeAppEventLog(&gTaskList[k], "restart %s mem usage rate: %d over threshold %d restart.", v.Name, memRate, gMemThreshold)
 				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
 				continue
 			}
@@ -522,7 +531,7 @@ func checkApps() {
 					gTaskList[k].Status = int(APP_STATUS_RUNNING)
 					gTaskList[k].StartTime = time.Now().Unix()
 					gTaskList[k].LogEndTime = time.Now().Unix()
-					log.Println("checkApps start name =", v.Name, ", path =", v.Path, ", pid =", v.Pid)
+					log.Println("checkApps start name =", v.Name, ", path =", v.Path, ", pid =", gTaskList[k].Pid)
 				}
 			} else {
 				log.Println("checkApps exec cmd nil:", v.Path)
@@ -547,7 +556,7 @@ func restartApp(idx int) error {
 	gTaskList[idx].LogEndTime = time.Now().Unix()
 	err := syscall.Kill(gTaskList[idx].Pid, 9)
 	if err != nil {
-		log.Printf("restartApp kill process: %s, pid:%d error: %s", gTaskList[idx].Name, gTaskList[idx].Pid, err.Error())
+		log.Printf("restartApp kill process: %s, pid:%d error: %s\n", gTaskList[idx].Name, gTaskList[idx].Pid, err.Error())
 		return err
 	}
 
@@ -578,7 +587,7 @@ func startApp(item *taskItem) error {
 	if cmd != nil {
 		err := cmd.Start()
 		if err != nil {
-			log.Printf("startApp: app=%s, %s", item.Path, err.Error())
+			log.Printf("startApp: app=%s, %s\n", item.Path, err.Error())
 			return err
 		}
 
@@ -669,7 +678,7 @@ func handleAppInstall(ctl *taskCmd) {
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
 
-		writeAppEventLog(item, "install %s success.", ctl.req.Name)
+		writeAppEventLog(item, "install install %s success.", ctl.req.Name)
 		gTaskList = append(gTaskList, *item)
 
 		writeAppInfoFile()
@@ -701,11 +710,11 @@ func handleAppStart(ctl *taskCmd) {
 			err := startApp(item)
 			if err != nil {
 				writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-				writeAppEventLog(item, "start %s operation failed.", item.Name)
+				writeAppEventLog(item, "start start %s operation failed.", item.Name)
 			} else {
 				writeAppInfoFile()
 				writeCtlSimpleRsp(ctl, 0, "Success.")
-				writeAppEventLog(item, "start %s success.", item.Name)
+				writeAppEventLog(item, "start start %s success.", item.Name)
 			}
 		} else {
 			writeCtlSimpleRsp(ctl, 0, "Success.")
@@ -721,13 +730,13 @@ func handleAppStart(ctl *taskCmd) {
 		err := startApp(&item)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-			writeAppEventLog(&item, "start %s operation failed.", item.Name)
+			writeAppEventLog(&item, "start start %s operation failed.", item.Name)
 		} else {
 			gTaskList = append(gTaskList, item)
 
 			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
-			writeAppEventLog(&item, "start %s success.", item.Name)
+			writeAppEventLog(&item, "start start %s success.", item.Name)
 		}
 	}
 }
@@ -750,13 +759,13 @@ func handleAppStop(ctl *taskCmd) {
 		log.Printf("handleAppStop: app=%s, pid=%d\n", item.Name, item.Pid)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-			writeAppEventLog(item, "stop %s operation failed.", item.Name)
+			writeAppEventLog(item, "stop stop %s operation failed.", item.Name)
 		} else {
 			item.Pid = 0
 			item.Status = int(APP_STATUS_STOP)
 			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
-			writeAppEventLog(item, "stop %s success.", item.Name)
+			writeAppEventLog(item, "stop stop %s success.", item.Name)
 		}
 
 	} else {
@@ -773,7 +782,7 @@ func handleAppStop(ctl *taskCmd) {
 		gTaskList = append(gTaskList, item)
 		writeAppInfoFile()
 		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-		writeAppEventLog(&item, "stop %s operation failed.", item.Name)
+		writeAppEventLog(&item, "stop stop %s operation failed.", item.Name)
 	}
 }
 
@@ -809,7 +818,7 @@ func handleAppEnable(ctl *taskCmd) {
 	}
 
 	writeCtlSimpleRsp(ctl, 0, "Success.")
-	writeAppEventLog(item, "enable %s success.", item.Name)
+	writeAppEventLog(item, "enable enable %s success.", item.Name)
 
 	/*
 		oldMask := syscall.Umask(0)
@@ -854,7 +863,7 @@ func handleAppDisable(ctl *taskCmd) {
 	}
 
 	writeCtlSimpleRsp(ctl, 0, "Success.")
-	writeAppEventLog(item, "disable %s success.", item.Name)
+	writeAppEventLog(item, "disable disable %s success.", item.Name)
 
 	/*
 		oldMask := syscall.Umask(0)
@@ -894,11 +903,11 @@ func handleAppRM(ctl *taskCmd) {
 	if err != nil {
 		code = 1
 		ret = "Operation failed."
-		writeAppEventLog(item, "unstall %s operation failed.", item.Name)
+		writeAppEventLog(item, "uninstall unstall %s operation failed.", item.Name)
 	} else {
 		code = 0
 		ret = "Success."
-		writeAppEventLog(item, "unstall %s success.", item.Name)
+		writeAppEventLog(item, "uninstall unstall %s success.", item.Name)
 	}
 
 	removeItem(item)
@@ -927,7 +936,7 @@ func handleAppList(ctl *taskCmd) {
 		rsp.Cmd = ctl.req.Cmd
 		rsp.Name = ctl.req.Name
 		rsp.Code = 0
-		rsp.Result = "Success."
+		rsp.Result = "Finish."
 		rsp.Total = int32(len(appMap))
 
 		appitem := appItem{}
@@ -948,7 +957,7 @@ func handleAppList(ctl *taskCmd) {
 			item.CpuThreshold = gCPUThreshold
 			item.CpuUsage = getAppCPUPercent(v.Name, v.Pid)
 			item.MemThreshold = gMemThreshold
-			item.MemUsage = getAppMem(v.Name, v.Pid)
+			item.MemUsage = getAppMemPercent(v.Name, v.Pid)
 			item.StartTime = v.StartTime
 			item.LogsStartTime = 0
 			item.LogsEndTime = 0
@@ -970,7 +979,7 @@ func handleAppList(ctl *taskCmd) {
 	rsp := &appCtlCmdRsp{}
 	rsp.Cmd = ctl.req.Cmd
 	rsp.Name = ctl.req.Name
-	rsp.Code = 0
+	rsp.Code = 1
 	rsp.Result = "Success."
 	rsp.Total = int32(len(appMap))
 
@@ -988,7 +997,7 @@ func handleAppList(ctl *taskCmd) {
 			item.CpuThreshold = gCPUThreshold
 			item.CpuUsage = getAppCPUPercent(v.Name, v.Pid)
 			item.MemThreshold = gMemThreshold
-			item.MemUsage = getAppMem(v.Name, v.Pid)
+			item.MemUsage = getAppMemPercent(v.Name, v.Pid)
 			item.StartTime = v.StartTime
 			if ctl.req.Log == 1 {
 				item.LogsStartTime = v.LogStartTime
@@ -1010,8 +1019,15 @@ func handleAppList(ctl *taskCmd) {
 
 		rsp.Items = append(rsp.Items, appitem)
 		idx = idx + 1
+
+		if idx%10 == 0 {
+			writeCtlRsp(rsp, ctl.remote)
+			rsp.Items = rsp.Items[0:0]
+		}
 	}
 
+	rsp.Code = 0
+	rsp.Result = "Finish."
 	writeCtlRsp(rsp, ctl.remote)
 }
 
@@ -1027,12 +1043,14 @@ func handleAppVersion(ctl *taskCmd) {
 func handleAppConfigCPU(ctl *taskCmd) {
 	gCPUThreshold = ctl.req.Value
 	log.Println("handleAppConfigCPU: ", ctl.req.Value)
+	writeAppInfoFile()
 	writeCtlSimpleRsp(ctl, 0, "Success.")
 }
 
 func handleAppConfigMem(ctl *taskCmd) {
 	gMemThreshold = ctl.req.Value
 	log.Println("handleAppConfigMem: ", ctl.req.Value)
+	writeAppInfoFile()
 	writeCtlSimpleRsp(ctl, 0, "Success.")
 }
 

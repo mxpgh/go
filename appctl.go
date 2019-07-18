@@ -22,6 +22,7 @@ var (
 	gDstUnixAddr *net.UnixAddr
 	gUnixAddr    *net.UnixAddr
 	gUnixConn    *net.UnixConn
+	gCtlCmdRsp   appCtlCmdRsp
 )
 
 type AppCmdType int8
@@ -408,11 +409,7 @@ func readUnixgram() {
 			}
 
 		case APP_CTL_LIST:
-			if 0 == ctlRsp.Code {
-				handleAppList(&ctlRsp)
-			} else {
-				fmt.Println(ctlRsp.Result)
-			}
+			handleAppList(&ctlRsp)
 
 		case APP_CTL_VERSION:
 			if 0 == ctlRsp.Code {
@@ -512,10 +509,21 @@ func readAppEventLog(fn string) []string {
 }
 
 func handleAppList(rsp *appCtlCmdRsp) {
-	bHaveEnter := false
-	fmt.Printf("Total app number %d \n\n", rsp.Total)
+	gCtlCmdRsp.Cmd = rsp.Cmd
+	gCtlCmdRsp.Name = rsp.Name
+	gCtlCmdRsp.Code = rsp.Code
+	gCtlCmdRsp.Result = rsp.Result
+	gCtlCmdRsp.Total = rsp.Total
+	gCtlCmdRsp.Items = append(gCtlCmdRsp.Items, rsp.Items...)
 
-	for k, v := range rsp.Items {
+	if rsp.Code != 0 {
+		return
+	}
+
+	bHaveEnter := false
+	fmt.Printf("Total app number %d \n\n", gCtlCmdRsp.Total)
+
+	for k, v := range gCtlCmdRsp.Items {
 		_ = k
 		fmt.Printf("%-20s: %d\n", "App index", v.Index)
 		fmt.Printf("%-20s: %s\n", "App name", v.Name)
@@ -546,7 +554,7 @@ func handleAppList(rsp *appCtlCmdRsp) {
 			fmt.Printf("%-20s: %d%%\n", "Cpu threshold", t.CpuThreshold)
 			fmt.Printf("%-20s: %d%%\n", "Cpu usage", t.CpuUsage)
 			fmt.Printf("%-20s: %d%%\n", "Mem threshold", t.MemThreshold)
-			fmt.Printf("%-20s: %d kB\n", "Mem usage", t.MemUsage)
+			fmt.Printf("%-20s: %d%%\n", "Mem usage", t.MemUsage)
 			fmt.Printf("%-20s: %s\n", "Start time", time.Unix(t.StartTime, 0).Format("2006-01-02 15:04:05"))
 
 			if t.LogsStartTime != 0 {
@@ -565,9 +573,11 @@ func handleAppList(rsp *appCtlCmdRsp) {
 				bHaveEnter = true
 			}
 		}
+
+		if !bHaveEnter {
+			fmt.Printf("\n")
+		}
 	}
 
-	if !bHaveEnter {
-		fmt.Printf("\n")
-	}
+	gCtlCmdRsp.Items = gCtlCmdRsp.Items[0:0]
 }

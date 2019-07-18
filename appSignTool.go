@@ -98,7 +98,7 @@ func main() {
 		return
 	}
 
-	cmd := fmt.Sprintf("cd %s && tar -zcvf %s%s.tar %s/", parentPath, *out, fl, fl)
+	cmd := fmt.Sprintf("cd %s && tar -zcvf %s.tar %s/", parentPath, filepath.Join(*out, fl), fl)
 	//fmt.Println(cmd)
 	execBashCmd(cmd)
 }
