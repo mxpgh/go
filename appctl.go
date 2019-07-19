@@ -23,6 +23,7 @@ var (
 	gUnixAddr    *net.UnixAddr
 	gUnixConn    *net.UnixConn
 	gCtlCmdRsp   appCtlCmdRsp
+	gLog         *log.Logger
 )
 
 type AppCmdType int8
@@ -99,9 +100,24 @@ func main() {
 		return
 	}
 
+	gLog = log.New(os.Stdout, "\r\n", log.LstdFlags|log.Lshortfile)
+	file, err := os.Create("/usr/local/monitor/appctl.log")
+	if err != nil {
+		log.Println("create log file error: ", err)
+	} else {
+		defer file.Close()
+
+		writers := []io.Writer{
+			file,
+			//os.Stdout,
+		}
+
+		gLog.SetOutput(io.MultiWriter(writers...))
+	}
+
 	gDstUnixAddr, err := net.ResolveUnixAddr("unixgram", "/var/run/appctl-daemon.sock")
 	if err != nil {
-		log.Println("resolve dst addr error: ", err)
+		gLog.Println("resolve dst addr error: ", err)
 		return
 	}
 	_ = gDstUnixAddr
@@ -109,13 +125,13 @@ func main() {
 	syscall.Unlink("/var/run/appctl-cli.sock")
 	gUnixAddr, err := net.ResolveUnixAddr("unixgram", "/var/run/appctl-cli.sock")
 	if err != nil {
-		log.Println("resolve addr error: ", err)
+		gLog.Println("resolve addr error: ", err)
 		return
 	}
 
 	gUnixConn, err = net.DialUnix("unixgram", gUnixAddr, gDstUnixAddr)
 	if err != nil {
-		log.Println("connect error: ", err)
+		gLog.Println("connect error: ", err)
 		return
 	}
 
@@ -131,7 +147,7 @@ func main() {
 	go func(c chan os.Signal) {
 		//等待SIGINT或SIGKILL：
 		sig := <-c
-		log.Println("Caught signal％s：shutting down。", sig)
+		gLog.Println("Caught signal％s：shutting down。", sig)
 		//停止监听（如果unix类型，则取消套接字连接）：
 		gUnixConn.Close()
 		//os.Remove("/var/run/appctl-cli.sock")
@@ -350,8 +366,8 @@ func closeUinxgram(ext bool) {
 func readUnixgram() {
 	for {
 		t := time.Now()
-		gUnixConn.SetReadDeadline(t.Add(time.Duration(3 * time.Second)))
-		buf := make([]byte, 1400)
+		gUnixConn.SetReadDeadline(t.Add(time.Duration(10 * time.Second)))
+		buf := make([]byte, 1024*16)
 		size, err := gUnixConn.Read(buf)
 		if err != nil {
 			fmt.Println("readUnixgram error: ", err)
@@ -409,7 +425,10 @@ func readUnixgram() {
 			}
 
 		case APP_CTL_LIST:
-			handleAppList(&ctlRsp)
+			ret := handleAppList(&ctlRsp)
+			if ret == 1 {
+				continue
+			}
 
 		case APP_CTL_VERSION:
 			if 0 == ctlRsp.Code {
@@ -450,7 +469,6 @@ func readUnixgram() {
 				log.Println(ctlRsp.Result)
 			}
 		}
-		//fmt.Println("recv:", string(buf[:size]))
 		break
 	}
 
@@ -508,7 +526,7 @@ func readAppEventLog(fn string) []string {
 	return strArray[retPos:]
 }
 
-func handleAppList(rsp *appCtlCmdRsp) {
+func handleAppList(rsp *appCtlCmdRsp) int {
 	gCtlCmdRsp.Cmd = rsp.Cmd
 	gCtlCmdRsp.Name = rsp.Name
 	gCtlCmdRsp.Code = rsp.Code
@@ -517,9 +535,9 @@ func handleAppList(rsp *appCtlCmdRsp) {
 	gCtlCmdRsp.Items = append(gCtlCmdRsp.Items, rsp.Items...)
 
 	if rsp.Code != 0 {
-		return
+		return 1
 	}
-
+	gLog.Println("handleAppList recv finish.")
 	bHaveEnter := false
 	fmt.Printf("Total app number %d \n\n", gCtlCmdRsp.Total)
 
@@ -578,6 +596,7 @@ func handleAppList(rsp *appCtlCmdRsp) {
 			fmt.Printf("\n")
 		}
 	}
-
+	gLog.Println("handleAppList display finish.")
 	gCtlCmdRsp.Items = gCtlCmdRsp.Items[0:0]
+	return 0
 }

@@ -528,28 +528,12 @@ func checkApps() {
 		}
 
 		if v.Cmd == int(APP_CMD_START) {
-			cmd := exec.Command(v.Path, v.Param)
-			if cmd != nil {
-				err := cmd.Start()
-				if err != nil {
-					log.Println("checkApps 0x0002:", err)
-				} else {
-					needUpd = true
-					gTaskList[k].Pid = cmd.Process.Pid
-					gTaskList[k].Status = int(APP_STATUS_RUNNING)
-					gTaskList[k].StartTime = time.Now().Unix()
-					gTaskList[k].LogEndTime = time.Now().Unix()
-					log.Println("checkApps start name =", v.Name, ", path =", v.Path, ", pid =", gTaskList[k].Pid)
-				}
-			} else {
-				log.Println("checkApps exec cmd nil:", v.Path)
+			err := startApp(&gTaskList[k])
+			if err != nil {
+				log.Printf("checkApps %s:%s", v.Path, err.Error())
 			}
 		}
 
-	}
-
-	if needUpd {
-		writeAppInfoFile()
 	}
 
 	endTime := time.Now().UTC()
@@ -602,8 +586,9 @@ func startApp(item *taskItem) error {
 		item.Pid = cmd.Process.Pid
 		item.Status = int(APP_STATUS_RUNNING)
 		item.StartTime = time.Now().Unix()
-		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
+
 		log.Println("startApp name =", item.Name, ", path =", item.Path, ", pid =", item.Pid)
 
 		return nil
@@ -722,7 +707,6 @@ func handleAppStart(ctl *taskCmd) {
 				writeCtlSimpleRsp(ctl, 1, "Operation failed.")
 				writeAppEventLog(item, "start start %s operation failed.", item.Name)
 			} else {
-				writeAppInfoFile()
 				writeCtlSimpleRsp(ctl, 0, "Success.")
 				writeAppEventLog(item, "start start %s success.", item.Name)
 			}
