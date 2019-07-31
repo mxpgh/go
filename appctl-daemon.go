@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.14"
+const version string = "1.15"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -489,7 +489,6 @@ func handleTask() {
 }
 
 func checkApps() {
-	needUpd := false
 	for k, v := range gTaskList {
 		_ = k
 		v.Param = ""
@@ -632,7 +631,7 @@ func handleAppInstall(ctl *taskCmd) {
 	log.Println("handleAppInstall: ", fn)
 
 	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
 		return
 	}
 	cmd := exec.Command("/bin/sh", "-c", "tar -zxvf "+fn+" -C "+defAppsExtFolder)
@@ -688,7 +687,7 @@ func handleAppStart(ctl *taskCmd) {
 	log.Println("handleAppStart: ", fn)
 
 	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
 		return
 	}
 
@@ -725,7 +724,7 @@ func handleAppStop(ctl *taskCmd) {
 	log.Println("handleAppStop: ", fn)
 
 	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
 		return
 	}
 
@@ -758,7 +757,7 @@ func handleAppEnable(ctl *taskCmd) {
 	log.Println("handleAppEnable: ", fn)
 
 	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
 		return
 	}
 
@@ -793,7 +792,7 @@ func handleAppDisable(ctl *taskCmd) {
 	log.Println("handleAppDisable: ", fn)
 
 	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
 		return
 	}
 
@@ -828,7 +827,7 @@ func handleAppRM(ctl *taskCmd) {
 	log.Println("handleAppRM: ", fn)
 
 	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
 		return
 	}
 
@@ -873,7 +872,7 @@ func handleAppList(ctl *taskCmd) {
 
 	if len(ctl.req.Name) > 0 {
 		if false == checkFileIsExist(fn) {
-			writeCtlSimpleRsp(ctl, 1, "File "+ctl.req.Name+" not exist.")
+			writeCtlSimpleRsp(ctl, 2, "Error: File "+ctl.req.Name+" not exist.")
 			return
 		}
 

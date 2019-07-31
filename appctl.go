@@ -425,9 +425,13 @@ func readUnixgram() {
 			}
 
 		case APP_CTL_LIST:
-			ret := handleAppList(&ctlRsp)
-			if ret == 1 {
-				continue
+			if 2 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				ret := handleAppList(&ctlRsp)
+				if ret == 1 {
+					continue
+				}
 			}
 
 		case APP_CTL_VERSION:
