@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.15"
+const version string = "1.17"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -81,6 +81,7 @@ const (
 var (
 	gUnixAddr       *net.UnixAddr
 	gUnixConn       *net.UnixConn
+	gUDPConn        net.Conn
 	gTaskChan       chan *taskCmd
 	gTaskList       []taskItem
 	gWaitTime       time.Duration
@@ -88,6 +89,7 @@ var (
 	gCPUThreshold   int
 	gMemThreshold   int
 	gAppCurrentPath string
+	gContainerID    string
 )
 
 type appCtlCmdReq struct {
@@ -162,9 +164,19 @@ type taskCmd struct {
 	req    appCtlCmdReq
 }
 
+type warnNotify struct {
+	Cid       string `json:"cid"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Value     int    `json:"value"`
+	Threshold int    `json:"threshold"`
+}
+
 func main() {
 	gAppCurrentPath = getCurrentPath()
 	log.Printf("appctl-daemon version %s, path: %s\n", version, gAppCurrentPath)
+	gContainerID = getContainerID()
+	log.Println("appctl-daemon in container id: ", gContainerID)
 
 	gCPUThreshold = defCPUThreshold
 	gMemThreshold = defMemThreshold
@@ -201,6 +213,13 @@ func main() {
 		gUnixConn.Close()
 		//os.Remove("/var/run/appctl-daemon.sock")
 	}()
+
+	gUDPConn, err = net.Dial("udp", "172.17.0.1:5600")
+	if err != nil {
+		log.Println("net.Dial udp error: ", err.Error())
+	} else {
+		defer gUDPConn.Close()
+	}
 
 	//处理常见的进程终止信号，以便我们可以正常关闭：
 	sig := make(chan os.Signal, 1)
@@ -500,14 +519,18 @@ func checkApps() {
 			memRate := getAppMemPercent(v.Name, v.Pid)
 			gTaskList[k].CPURate = cpuRate
 			gTaskList[k].MemRate = memRate
+
 			if cpuRate > gCPUThreshold {
 				restartApp(k)
+				sendWarnNotify(v.Name, "cpu", cpuRate, gCPUThreshold)
 				writeAppEventLog(&gTaskList[k], "restart %s cpu usage rate: %d over threshold %d restart.", v.Name, cpuRate, gCPUThreshold)
 				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
 				continue
 			}
+
 			if memRate > gMemThreshold {
 				restartApp(k)
+				sendWarnNotify(v.Name, "mem", memRate, gMemThreshold)
 				writeAppEventLog(&gTaskList[k], "restart %s mem usage rate: %d over threshold %d restart.", v.Name, memRate, gMemThreshold)
 				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
 				continue
@@ -672,7 +695,7 @@ func handleAppInstall(ctl *taskCmd) {
 		item.Version = getAppVersion(appName)
 		item.Hash = getAppHash(appName)
 
-		writeAppEventLog(item, "install install %s success.", ctl.req.Name)
+		writeAppEventLog(item, "install %s success.", ctl.req.Name)
 		gTaskList = append(gTaskList, *item)
 
 		writeAppInfoFile()
@@ -704,10 +727,10 @@ func handleAppStart(ctl *taskCmd) {
 			err := startApp(item)
 			if err != nil {
 				writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-				writeAppEventLog(item, "start start %s operation failed.", item.Name)
+				writeAppEventLog(item, "start %s operation failed.", item.Name)
 			} else {
 				writeCtlSimpleRsp(ctl, 0, "Success.")
-				writeAppEventLog(item, "start start %s success.", item.Name)
+				writeAppEventLog(item, "start %s success.", item.Name)
 			}
 		} else {
 			writeCtlSimpleRsp(ctl, 0, "Success.")
@@ -736,13 +759,13 @@ func handleAppStop(ctl *taskCmd) {
 		log.Printf("handleAppStop: app=%s, pid=%d\n", item.Name, item.Pid)
 		if err != nil {
 			writeCtlSimpleRsp(ctl, 1, "Operation failed.")
-			writeAppEventLog(item, "stop stop %s operation failed.", item.Name)
+			writeAppEventLog(item, "stop %s operation failed.", item.Name)
 		} else {
 			item.Pid = 0
 			item.Status = int(APP_STATUS_STOP)
 			writeAppInfoFile()
 			writeCtlSimpleRsp(ctl, 0, "Success.")
-			writeAppEventLog(item, "stop stop %s success.", item.Name)
+			writeAppEventLog(item, "stop %s success.", item.Name)
 		}
 
 	} else {
@@ -768,7 +791,7 @@ func handleAppEnable(ctl *taskCmd) {
 		item.LogEndTime = time.Now().Unix()
 		writeAppInfoFile()
 		writeCtlSimpleRsp(ctl, 0, "Success.")
-		writeAppEventLog(item, "enable enable %s success.", item.Name)
+		writeAppEventLog(item, "enable %s success.", item.Name)
 	} else {
 		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
 		log.Println("handleAppEnable findAppItem nil")
@@ -803,7 +826,7 @@ func handleAppDisable(ctl *taskCmd) {
 		item.LogEndTime = time.Now().Unix()
 		writeAppInfoFile()
 		writeCtlSimpleRsp(ctl, 0, "Success.")
-		writeAppEventLog(item, "disable disable %s success.", item.Name)
+		writeAppEventLog(item, "disable %s success.", item.Name)
 	} else {
 		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
 		log.Println("handleAppDisable findAppItem nil")
@@ -847,11 +870,11 @@ func handleAppRM(ctl *taskCmd) {
 	if err != nil {
 		code = 1
 		ret = "Operation failed."
-		writeAppEventLog(item, "uninstall unstall %s operation failed.", item.Name)
+		writeAppEventLog(item, "uninstall %s operation failed.", item.Name)
 	} else {
 		code = 0
 		ret = "Success."
-		writeAppEventLog(item, "uninstall unstall %s success.", item.Name)
+		writeAppEventLog(item, "uninstall %s success.", item.Name)
 	}
 
 	removeItem(item)
@@ -1181,6 +1204,23 @@ func getAppHash(name string) string {
 	return fmt.Sprintf("%x", md5hash.Sum(nil))
 }
 
+func getContainerID() string {
+	fl, err := os.Open("/etc/hostname")
+	if err != nil {
+		log.Println("getContainerID 0x0001:", err)
+		return ""
+	}
+
+	defer fl.Close()
+	content, err := ioutil.ReadAll(fl)
+	if err != nil {
+		log.Println("getContainerID 0x0002:", err)
+		return ""
+	}
+
+	return formatString(string(content))
+}
+
 func formatString(str string) string {
 	str = strings.Replace(str, " ", "", -1)
 	str = strings.Replace(str, "\n", "", -1)
@@ -1268,4 +1308,24 @@ func writeAppInfoFile() {
 	lst := taskList{}
 	lst.Items = append(lst.Items, gTaskList...)
 	writeFile(&lst)
+}
+
+func sendWarnNotify(name, kind string, value, threshold int) {
+	warn := warnNotify{}
+	warn.Cid = gContainerID
+	warn.Kind = kind
+	warn.Name = name
+	warn.Threshold = threshold
+	warn.Value = value
+	data, err := json.Marshal(&warn)
+	if err != nil {
+		log.Println("sendWarnNotify marshal error:", err)
+		return
+	}
+
+	_, err = gUDPConn.Write(data)
+	if err != nil {
+		log.Println("sendWarnNotify udp write error:", err)
+		return
+	}
 }
