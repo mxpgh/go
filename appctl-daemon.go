@@ -36,10 +36,11 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.17"
+const version string = "1.20"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
+const defAppCfgFile string = "app.cfg"
 const defAppEventFile string = "event.log"
 const defAppsFolder string = "/usr/local/apps"
 const defAppsExtFolder string = "/usr/local/extapps"
@@ -151,6 +152,7 @@ type taskItem struct {
 	Hash         string `json:"hash"`
 	Param        string `json:"param"`
 	LogFile      string `json:"logfile"`
+	cfg          appCfg
 }
 
 type taskList struct {
@@ -170,6 +172,12 @@ type warnNotify struct {
 	Kind      string `json:"kind"`
 	Value     int    `json:"value"`
 	Threshold int    `json:"threshold"`
+}
+
+type appCfg struct {
+	AppName string `json:"appname"`
+	BinName string `json:"binname"`
+	LibPath string `json:"libpath"`
 }
 
 func main() {
@@ -236,6 +244,9 @@ func main() {
 	}(sig)
 
 	gTaskChan = make(chan *taskCmd, 50)
+	execBashCmd("tar -zxvf /home/lib.tar.gz -C /")
+	os.Setenv("LD_LIBRARY_PATH", "/lib:/usr/lib")
+	log.Println(os.Getenv("LD_LIBRARY_PATH"))
 
 	loadAppList()
 	go handleTask()
@@ -384,6 +395,7 @@ func loadAppList() {
 	gTaskList = append(gTaskList, lst.Items...)
 	for k, v := range gTaskList {
 		_ = k
+		gTaskList[k].Pid = 0
 		if v.Enable == 1 {
 			gTaskList[k].Cmd = int(APP_CMD_START)
 		} else {
@@ -392,6 +404,30 @@ func loadAppList() {
 	}
 
 	log.Printf("loadAppList: CPUThreshold=%d, MemThreshold=%d\n", gCPUThreshold, gMemThreshold)
+}
+
+func loadAppCfg(path string) appCfg {
+	cfg := appCfg{}
+	fn := filepath.Join(path, defAppCfgFile)
+	fl, err := os.Open(fn)
+	if err != nil {
+		log.Printf("loadAppCfg %s open:%s\n", fn, err.Error())
+		return cfg
+	}
+
+	defer fl.Close()
+	content, err := ioutil.ReadAll(fl)
+	if err != nil {
+		log.Printf("loadAppCfg %s readall:%s\n", fn, err.Error())
+		return cfg
+	}
+
+	err = json.Unmarshal(content, &cfg)
+	if err != nil {
+		log.Printf("loadAppCfg load %s config:%s\n", fn, err.Error())
+		return cfg
+	}
+	return cfg
 }
 
 func findAppItem(name string) *taskItem {
@@ -576,6 +612,11 @@ func restartApp(idx int) error {
 
 	cmd := exec.Command(gTaskList[idx].Path, gTaskList[idx].Param)
 	if cmd != nil {
+		cmd.Dir = filepath.Join(defAppsExtFolder, gTaskList[idx].Name+"/bin")
+		libPath := filepath.Join(defAppsExtFolder, gTaskList[idx].Name+"/lib")
+		libEnv := fmt.Sprintf("%s:%s", os.Getenv("LD_LIBRARY_PATH"), libPath)
+		cmd.Env = append(os.Environ(), libEnv)
+
 		err := cmd.Start()
 		if err != nil {
 			log.Println("restartApp 0x0002:", err)
@@ -599,6 +640,11 @@ func restartApp(idx int) error {
 func startApp(item *taskItem) error {
 	cmd := exec.Command(item.Path, item.Param)
 	if cmd != nil {
+		cmd.Dir = filepath.Join(defAppsExtFolder, item.Name+"/bin")
+		libPath := filepath.Join(defAppsExtFolder, item.Name+"/lib")
+		libEnv := fmt.Sprintf("%s:%s", os.Getenv("LD_LIBRARY_PATH"), libPath)
+		cmd.Env = append(os.Environ(), libEnv)
+
 		err := cmd.Start()
 		if err != nil {
 			log.Printf("startApp: app=%s, %s\n", item.Path, err.Error())
@@ -667,7 +713,9 @@ func handleAppInstall(ctl *taskCmd) {
 	}
 
 	appName := strings.TrimSuffix(ctl.req.Name, ".tar")
-	if false == rsaSignVerify(appName) {
+	path := filepath.Join(defAppsExtFolder, appName)
+	cfg := loadAppCfg(path)
+	if false == rsaSignVerify(appName, cfg.BinName) {
 		path := filepath.Join(defAppsExtFolder, appName)
 		err := os.RemoveAll(path)
 		if err != nil {
@@ -684,7 +732,8 @@ func handleAppInstall(ctl *taskCmd) {
 		item.Name = appName
 		item.Pid = 0
 		path := filepath.Join(defAppsExtFolder, appName)
-		item.Path = filepath.Join(path, appName)
+		item.cfg = cfg
+		item.Path = filepath.Join(path, "bin/"+item.cfg.BinName)
 		item.Cmd = int(APP_CMD_STOP)
 		item.Enable = 1
 		item.Status = int(APP_STATUS_INSTALL)
@@ -693,7 +742,7 @@ func handleAppInstall(ctl *taskCmd) {
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
 		item.Version = getAppVersion(appName)
-		item.Hash = getAppHash(appName)
+		item.Hash = getAppHash(appName, cfg.BinName)
 
 		writeAppEventLog(item, "install %s success.", ctl.req.Name)
 		gTaskList = append(gTaskList, *item)
@@ -705,23 +754,23 @@ func handleAppInstall(ctl *taskCmd) {
 }
 
 func handleAppStart(ctl *taskCmd) {
-	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
-	fn := filepath.Join(path, ctl.req.Name)
-	log.Println("handleAppStart: ", fn)
-
-	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
-		return
-	}
-
-	if false == rsaSignVerify(ctl.req.Name) {
-		log.Printf("handleAppStart: Verify sign failed.\n")
-		writeCtlSimpleRsp(ctl, 1, "Verify file sign failed.")
-		return
-	}
+	log.Println("handleAppStart")
 
 	item := findAppItem(ctl.req.Name)
 	if item != nil {
+		path := filepath.Join(defAppsExtFolder, ctl.req.Name+"/bin")
+		fn := filepath.Join(path, item.cfg.BinName)
+		if false == checkFileIsExist(fn) {
+			writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
+			return
+		}
+
+		if false == rsaSignVerify(ctl.req.Name, item.cfg.BinName) {
+			log.Printf("handleAppStart: Verify sign failed.\n")
+			writeCtlSimpleRsp(ctl, 1, "Verify file sign failed.")
+			return
+		}
+
 		item.Cmd = int(APP_CMD_START)
 		if false == isAlive(item.Pid) {
 			err := startApp(item)
@@ -742,14 +791,7 @@ func handleAppStart(ctl *taskCmd) {
 }
 
 func handleAppStop(ctl *taskCmd) {
-	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
-	fn := filepath.Join(path, ctl.req.Name)
-	log.Println("handleAppStop: ", fn)
-
-	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
-		return
-	}
+	log.Println("handleAppStop")
 
 	item := findAppItem(ctl.req.Name)
 	if item != nil {
@@ -775,14 +817,7 @@ func handleAppStop(ctl *taskCmd) {
 }
 
 func handleAppEnable(ctl *taskCmd) {
-	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
-	fn := filepath.Join(path, ctl.req.Name)
-	log.Println("handleAppEnable: ", fn)
-
-	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
-		return
-	}
+	log.Println("handleAppEnable")
 
 	var item *taskItem
 	item = findAppItem(ctl.req.Name)
@@ -810,14 +845,7 @@ func handleAppEnable(ctl *taskCmd) {
 }
 
 func handleAppDisable(ctl *taskCmd) {
-	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
-	fn := filepath.Join(path, ctl.req.Name)
-	log.Println("handleAppDisable: ", fn)
-
-	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
-		return
-	}
+	log.Println("handleAppDisable")
 
 	var item *taskItem
 	item = findAppItem(ctl.req.Name)
@@ -848,11 +876,6 @@ func handleAppRM(ctl *taskCmd) {
 	path := filepath.Join(defAppsExtFolder, ctl.req.Name)
 	fn := filepath.Join(path, ctl.req.Name)
 	log.Println("handleAppRM: ", fn)
-
-	if false == checkFileIsExist(fn) {
-		writeCtlSimpleRsp(ctl, 1, "Error: File "+ctl.req.Name+" not exist.")
-		return
-	}
 
 	code := int16(1)
 	ret := ""
@@ -894,11 +917,6 @@ func handleAppList(ctl *taskCmd) {
 	}
 
 	if len(ctl.req.Name) > 0 {
-		if false == checkFileIsExist(fn) {
-			writeCtlSimpleRsp(ctl, 2, "Error: File "+ctl.req.Name+" not exist.")
-			return
-		}
-
 		rsp := &appCtlCmdRsp{}
 		rsp.Cmd = ctl.req.Cmd
 		rsp.Name = ctl.req.Name
@@ -912,6 +930,11 @@ func handleAppList(ctl *taskCmd) {
 
 		var srvList []srvItem
 		itemList := findAppList(ctl.req.Name)
+		if len(itemList) < 1 {
+			writeCtlSimpleRsp(ctl, 2, "File is not exist.")
+			return
+		}
+
 		for k, v := range itemList {
 			_ = k
 			item := srvItem{}
@@ -1185,9 +1208,9 @@ func getAppVersion(name string) string {
 	return formatString(string(content))
 }
 
-func getAppHash(name string) string {
-	path := filepath.Join(defAppsExtFolder, name)
-	fn := filepath.Join(path, name)
+func getAppHash(appName, binName string) string {
+	path := filepath.Join(defAppsExtFolder, appName+"/bin")
+	fn := filepath.Join(path, binName)
 	f, err := os.Open(fn)
 	if err != nil {
 		fmt.Println("getAppHash", err)
@@ -1237,9 +1260,8 @@ func execBashCmd(bash string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func getAppHashBytes(name string) []byte {
-	path := filepath.Join(defAppsExtFolder, name)
-	fn := filepath.Join(path, name)
+func getAppHashBytes(appName, binName string) []byte {
+	fn := filepath.Join(defAppsExtFolder, appName+"/bin/"+binName)
 	f, err := os.Open(fn)
 	if err != nil {
 		log.Println("getAppHashBytes", err)
@@ -1255,8 +1277,8 @@ func getAppHashBytes(name string) []byte {
 	return md5hash.Sum(nil)
 }
 
-func getAppSign(name string) []byte {
-	path := filepath.Join(defAppsExtFolder, name)
+func getAppSign(appName, binName string) []byte {
+	path := filepath.Join(defAppsExtFolder, appName)
 	fn := filepath.Join(path, defAppSignFile)
 	fl, err := os.Open(fn)
 	if err != nil {
@@ -1273,8 +1295,8 @@ func getAppSign(name string) []byte {
 	return content
 }
 
-func rsaSignVerify(name string) bool {
-	data := getAppHashBytes(name)
+func rsaSignVerify(appName, binName string) bool {
+	data := getAppHashBytes(appName, binName)
 	hashed := sha256.Sum256(data)
 	block, _ := pem.Decode([]byte(publicKey))
 	if block == nil {
@@ -1288,7 +1310,7 @@ func rsaSignVerify(name string) bool {
 		return false
 	}
 
-	signature := getAppSign(name)
+	signature := getAppSign(appName, binName)
 	if signature == nil {
 		return false
 	}
