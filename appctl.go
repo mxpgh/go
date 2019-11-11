@@ -38,10 +38,15 @@ const (
 	APP_CTL_RM
 	APP_CTL_LIST
 	APP_CTL_VERSION
-	APP_CTL_CONFIG_CPU
-	APP_CTL_CONFIG_MEM
-	APP_CTL_QUERY_CPU
-	APP_CTL_QUERY_MEM
+	APP_CTL_CONFIG_CPU_THRESHOLD
+	APP_CTL_CONFIG_MEM_THRESHOLD
+	APP_CTL_QUERY_CPU_THRESHOLD
+	APP_CTL_QUERY_MEM_THRESHOLD
+	APP_CTL_CONFIG_CPU_LIMIT
+	APP_CTL_CONFIG_MEM_LIMIT
+	APP_CTL_QUERY_CPU_LIMIT
+	APP_CTL_QUERY_MEM_LIMIT
+	APP_CTL_QUERY_ALL_RESOURCE
 	APP_CTL_LOGS
 )
 
@@ -72,9 +77,11 @@ type srvItem struct {
 	Name          string
 	Enable        int8
 	Status        int8
-	CpuThreshold  int
-	CpuUsage      int
+	CPUThreshold  int
+	CPULimit      int
+	CPUUsage      int
 	MemThreshold  int
+	MemLimit      int
 	MemUsage      int
 	StartTime     int64
 	LogsStartTime int64
@@ -274,13 +281,14 @@ func main() {
 		}
 	case "-cpu":
 		{
-			if len(os.Args) < 3 {
+			if len(os.Args) < 4 {
 				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
 			ctl := appCtlCmdReq{}
-			ctl.Cmd = APP_CTL_CONFIG_CPU
+			ctl.Cmd = APP_CTL_CONFIG_CPU_THRESHOLD
+			ctl.Name = os.Args[3]
 			val, err := strconv.Atoi(os.Args[2])
 			if err != nil {
 				fmt.Println("Command args value error.")
@@ -292,13 +300,52 @@ func main() {
 		}
 	case "-mem":
 		{
-			if len(os.Args) < 3 {
+			if len(os.Args) < 4 {
 				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
 			ctl := appCtlCmdReq{}
-			ctl.Cmd = APP_CTL_CONFIG_MEM
+			ctl.Cmd = APP_CTL_CONFIG_MEM_THRESHOLD
+			ctl.Name = os.Args[3]
+			val, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Println("Command args value error.")
+				os.Exit(0)
+			} else {
+				ctl.Value = val
+			}
+			writeUnixgram(&ctl)
+		}
+	case "-cpulimit":
+		{
+			if len(os.Args) < 4 {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_CONFIG_CPU_LIMIT
+			ctl.Name = os.Args[3]
+			val, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Println("Command args value error.")
+				os.Exit(0)
+			} else {
+				ctl.Value = val
+			}
+			writeUnixgram(&ctl)
+		}
+	case "-memlimit":
+		{
+			if len(os.Args) < 4 {
+				fmt.Println("Command args error.")
+				os.Exit(0)
+				return
+			}
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_CONFIG_MEM_LIMIT
+			ctl.Name = os.Args[3]
 			val, err := strconv.Atoi(os.Args[2])
 			if err != nil {
 				fmt.Println("Command args value error.")
@@ -310,24 +357,42 @@ func main() {
 		}
 	case "-query":
 		{
-			if len(os.Args) < 3 {
+			if len(os.Args) < 4 {
 				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
 			if os.Args[2] == "cpu" {
 				ctl := appCtlCmdReq{}
-				ctl.Cmd = APP_CTL_QUERY_CPU
+				ctl.Cmd = APP_CTL_QUERY_CPU_THRESHOLD
+				ctl.Name = os.Args[3]
 				writeUnixgram(&ctl)
 			} else if os.Args[2] == "mem" {
 				ctl := appCtlCmdReq{}
-				ctl.Cmd = APP_CTL_QUERY_MEM
+				ctl.Cmd = APP_CTL_QUERY_MEM_THRESHOLD
+				ctl.Name = os.Args[3]
+				writeUnixgram(&ctl)
+			} else if os.Args[2] == "cpulimit" {
+				ctl := appCtlCmdReq{}
+				ctl.Cmd = APP_CTL_QUERY_CPU_LIMIT
+				ctl.Name = os.Args[3]
+				writeUnixgram(&ctl)
+			} else if os.Args[2] == "memlimit" {
+				ctl := appCtlCmdReq{}
+				ctl.Cmd = APP_CTL_QUERY_MEM_LIMIT
+				ctl.Name = os.Args[3]
 				writeUnixgram(&ctl)
 			} else {
 				fmt.Println("Command args error.")
 				os.Exit(0)
 				return
 			}
+		}
+	case "-queryall":
+		{
+			ctl := appCtlCmdReq{}
+			ctl.Cmd = APP_CTL_QUERY_ALL_RESOURCE
+			writeUnixgram(&ctl)
 		}
 	case "-logs":
 		{
@@ -441,31 +506,69 @@ func readUnixgram() {
 				//log.Println(ctlRsp.Result)
 			}
 
-		case APP_CTL_CONFIG_CPU:
+		case APP_CTL_CONFIG_CPU_THRESHOLD:
 			if 0 == ctlRsp.Code {
 				//fmt.Println(ctlRsp.Result)
 			} else {
 				log.Println(ctlRsp.Result)
 			}
 
-		case APP_CTL_CONFIG_MEM:
+		case APP_CTL_CONFIG_MEM_THRESHOLD:
 			if 0 == ctlRsp.Code {
 				//fmt.Println(ctlRsp.Result)
 			} else {
 				log.Println(ctlRsp.Result)
 			}
-		case APP_CTL_QUERY_CPU:
+
+		case APP_CTL_QUERY_CPU_THRESHOLD:
 			if 0 == ctlRsp.Code {
 				fmt.Println(ctlRsp.Result)
 			} else {
 				log.Println(ctlRsp.Result)
 			}
-		case APP_CTL_QUERY_MEM:
+
+		case APP_CTL_QUERY_MEM_THRESHOLD:
 			if 0 == ctlRsp.Code {
 				fmt.Println(ctlRsp.Result)
 			} else {
 				log.Println(ctlRsp.Result)
 			}
+
+		case APP_CTL_CONFIG_CPU_LIMIT:
+			if 0 == ctlRsp.Code {
+				//fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_CONFIG_MEM_LIMIT:
+			if 0 == ctlRsp.Code {
+				//fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_QUERY_CPU_LIMIT:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_QUERY_MEM_LIMIT:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+
+		case APP_CTL_QUERY_ALL_RESOURCE:
+			if 0 == ctlRsp.Code {
+				fmt.Println(ctlRsp.Result)
+			} else {
+				log.Println(ctlRsp.Result)
+			}
+
 		case APP_CTL_LOGS:
 			if 0 == ctlRsp.Code {
 				fmt.Println(ctlRsp.Result)
@@ -573,8 +676,8 @@ func handleAppList(rsp *appCtlCmdRsp) int {
 				fmt.Printf("%-20s: stop\n", "Service status")
 			}
 
-			fmt.Printf("%-20s: %d%%\n", "Cpu threshold", t.CpuThreshold)
-			fmt.Printf("%-20s: %d%%\n", "Cpu usage", t.CpuUsage)
+			fmt.Printf("%-20s: %d%%\n", "CPU threshold", t.CPUThreshold)
+			fmt.Printf("%-20s: %d%%\n", "CPU usage", t.CPUUsage)
 			fmt.Printf("%-20s: %d%%\n", "Mem threshold", t.MemThreshold)
 			fmt.Printf("%-20s: %d%%\n", "Mem usage", t.MemUsage)
 			fmt.Printf("%-20s: %s\n", "Start time", time.Unix(t.StartTime, 0).Format("2006-01-02 15:04:05"))

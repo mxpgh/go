@@ -36,7 +36,7 @@ LILyqkMGP2KAQJhVgQIDAQAB
 -----END PUBLIC KEY-----
 `
 
-const version string = "1.20"
+const version string = "1.31"
 const cfgFile string = "monitor.cfg"
 const defAppVersionFile string = "version.cfg"
 const defAppSignFile string = "sign.cfg"
@@ -46,6 +46,8 @@ const defAppsFolder string = "/usr/local/apps"
 const defAppsExtFolder string = "/usr/local/extapps"
 const defCPUThreshold int = 90
 const defMemThreshold int = 90
+const defCPULimit int = 90
+const defMemLimit int = 90
 
 type AppCmdType int8
 
@@ -59,10 +61,15 @@ const (
 	APP_CTL_RM
 	APP_CTL_LIST
 	APP_CTL_VERSION
-	APP_CTL_CONFIG_CPU
-	APP_CTL_CONFIG_MEM
-	APP_CTL_QUERY_CPU
-	APP_CTL_QUERY_MEM
+	APP_CTL_CONFIG_CPU_THRESHOLD
+	APP_CTL_CONFIG_MEM_THRESHOLD
+	APP_CTL_QUERY_CPU_THRESHOLD
+	APP_CTL_QUERY_MEM_THRESHOLD
+	APP_CTL_CONFIG_CPU_LIMIT
+	APP_CTL_CONFIG_MEM_LIMIT
+	APP_CTL_QUERY_CPU_LIMIT
+	APP_CTL_QUERY_MEM_LIMIT
+	APP_CTL_QUERY_ALL_RESOURCE
 	APP_CTL_LOGS
 )
 
@@ -114,9 +121,11 @@ type srvItem struct {
 	Name          string
 	Enable        int8
 	Status        int8
-	CpuThreshold  int
-	CpuUsage      int
+	CPUThreshold  int
+	CPULimit      int
+	CPUUsage      int
 	MemThreshold  int
+	MemLimit      int
 	MemUsage      int
 	StartTime     int64
 	LogsStartTime int64
@@ -124,11 +133,10 @@ type srvItem struct {
 }
 
 type appItem struct {
-	Index   int32
-	Name    string
-	Version string
-	Hash    string
-
+	Index    int32
+	Name     string
+	Version  string
+	Hash     string
 	SrvTotal int32
 	SrvItems []srvItem
 	LogFile  string
@@ -146,6 +154,8 @@ type taskItem struct {
 	LogEndTime   int64  `json:"logendtime"`
 	CPUThreshold int    `json:"cputhreshold"`
 	MemThreshold int    `json:"memthreshold"`
+	CPULimit     int    `json:"cpulimit"`
+	MemLimit     int    `json:"memlimit"`
 	CPURate      int    `json:"cpurate"`
 	MemRate      int    `json:"memrate"`
 	Version      string `json:"version"`
@@ -178,6 +188,16 @@ type appCfg struct {
 	AppName string `json:"appname"`
 	BinName string `json:"binname"`
 	LibPath string `json:"libpath"`
+}
+
+type appResource struct {
+	Name         string `json:"name"`
+	CPUThreshold int    `json:"cputhreshold`
+	MemThreshold int    `json:"memthreshold"`
+}
+
+type appResourceList struct {
+	Items []appResource `json:"items"`
 }
 
 func main() {
@@ -245,8 +265,8 @@ func main() {
 
 	gTaskChan = make(chan *taskCmd, 50)
 	execBashCmd("tar -zxvf /home/lib.tar.gz -C /")
-	os.Setenv("LD_LIBRARY_PATH", "/lib:/usr/lib")
-	log.Println(os.Getenv("LD_LIBRARY_PATH"))
+	//os.Setenv("LD_LIBRARY_PATH", "/lib:/usr/lib:/home/zxlib")
+	//log.Println(os.Getenv("LD_LIBRARY_PATH"))
 
 	loadAppList()
 	go handleTask()
@@ -401,6 +421,9 @@ func loadAppList() {
 		} else {
 			gTaskList[k].Cmd = int(APP_CMD_STOP)
 		}
+
+		path := filepath.Join(defAppsExtFolder, gTaskList[k].Name)
+		gTaskList[k].cfg = loadAppCfg(path)
 	}
 
 	log.Printf("loadAppList: CPUThreshold=%d, MemThreshold=%d\n", gCPUThreshold, gMemThreshold)
@@ -517,20 +540,35 @@ func handleTask() {
 					case APP_CTL_VERSION:
 						handleAppVersion(ctlReq)
 
-					case APP_CTL_CONFIG_CPU:
-						handleAppConfigCPU(ctlReq)
+					case APP_CTL_CONFIG_CPU_THRESHOLD:
+						handleAppConfigCPUThreshold(ctlReq)
 
-					case APP_CTL_CONFIG_MEM:
-						handleAppConfigMem(ctlReq)
+					case APP_CTL_CONFIG_MEM_THRESHOLD:
+						handleAppConfigMemThreshold(ctlReq)
 
-					case APP_CTL_QUERY_CPU:
-						handleAppQueryCPU(ctlReq)
+					case APP_CTL_QUERY_CPU_THRESHOLD:
+						handleAppQueryCPUThreshold(ctlReq)
 
-					case APP_CTL_QUERY_MEM:
-						handleAppQueryMem(ctlReq)
+					case APP_CTL_QUERY_MEM_THRESHOLD:
+						handleAppQueryMemThreshold(ctlReq)
+
+					case APP_CTL_CONFIG_CPU_LIMIT:
+						handleAppConfigCPULimit(ctlReq)
+
+					case APP_CTL_CONFIG_MEM_LIMIT:
+						handleAppConfigMemLimit(ctlReq)
+
+					case APP_CTL_QUERY_CPU_LIMIT:
+						handleAppQueryCPULimit(ctlReq)
+
+					case APP_CTL_QUERY_MEM_LIMIT:
+						handleAppQueryMemLimit(ctlReq)
 
 					case APP_CTL_LOGS:
 						handleAppLogs(ctlReq)
+
+					case APP_CTL_QUERY_ALL_RESOURCE:
+						handleAppQueryAllResource(ctlReq)
 					}
 				}
 			}
@@ -556,19 +594,21 @@ func checkApps() {
 			gTaskList[k].CPURate = cpuRate
 			gTaskList[k].MemRate = memRate
 
-			if cpuRate > gCPUThreshold {
+			if cpuRate > v.CPUThreshold {
 				restartApp(k)
-				sendWarnNotify(v.Name, "cpu", cpuRate, gCPUThreshold)
-				writeAppEventLog(&gTaskList[k], "restart %s cpu usage rate: %d over threshold %d restart.", v.Name, cpuRate, gCPUThreshold)
-				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, gCPUThreshold)
+				sendWarnNotify(v.Name, "cpu", cpuRate, v.CPUThreshold)
+				writeAppEventLog(&gTaskList[k], "restart %s cpu usage rate: %d over threshold %d restart.", v.Name, cpuRate, v.CPUThreshold)
+				log.Printf("%s(%d) cpu usage rate: %d over threshold %d restart\n", v.Name, v.Pid, cpuRate, v.CPUThreshold)
+
 				continue
 			}
 
-			if memRate > gMemThreshold {
+			if memRate > v.MemThreshold {
 				restartApp(k)
-				sendWarnNotify(v.Name, "mem", memRate, gMemThreshold)
-				writeAppEventLog(&gTaskList[k], "restart %s mem usage rate: %d over threshold %d restart.", v.Name, memRate, gMemThreshold)
-				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, gMemThreshold)
+				sendWarnNotify(v.Name, "mem", memRate, v.MemThreshold)
+				writeAppEventLog(&gTaskList[k], "restart %s mem usage rate: %d over threshold %d restart.", v.Name, memRate, v.MemThreshold)
+				log.Printf("%s(%d) mem usage rate: %d over threshold %d restart\n", v.Name, v.Pid, memRate, v.MemThreshold)
+
 				continue
 			}
 
@@ -614,8 +654,10 @@ func restartApp(idx int) error {
 	if cmd != nil {
 		cmd.Dir = filepath.Join(defAppsExtFolder, gTaskList[idx].Name+"/bin")
 		libPath := filepath.Join(defAppsExtFolder, gTaskList[idx].Name+"/lib")
-		libEnv := fmt.Sprintf("%s:%s", os.Getenv("LD_LIBRARY_PATH"), libPath)
+		libEnv := fmt.Sprintf("LD_LIBRARY_PATH=/lib:/usr/lib:/home/zxlib:%s", libPath)
 		cmd.Env = append(os.Environ(), libEnv)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 
 		err := cmd.Start()
 		if err != nil {
@@ -623,6 +665,7 @@ func restartApp(idx int) error {
 			return err
 		}
 
+		go cmd.Wait()
 		gTaskList[idx].Pid = cmd.Process.Pid
 		gTaskList[idx].Status = int(APP_STATUS_RUNNING)
 		gTaskList[idx].StartTime = time.Now().Unix()
@@ -642,8 +685,10 @@ func startApp(item *taskItem) error {
 	if cmd != nil {
 		cmd.Dir = filepath.Join(defAppsExtFolder, item.Name+"/bin")
 		libPath := filepath.Join(defAppsExtFolder, item.Name+"/lib")
-		libEnv := fmt.Sprintf("%s:%s", os.Getenv("LD_LIBRARY_PATH"), libPath)
+		libEnv := fmt.Sprintf("LD_LIBRARY_PATH=/lib:/usr/lib:/home/zxlib:%s", libPath)
 		cmd.Env = append(os.Environ(), libEnv)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 
 		err := cmd.Start()
 		if err != nil {
@@ -651,6 +696,7 @@ func startApp(item *taskItem) error {
 			return err
 		}
 
+		go cmd.Wait()
 		item.Pid = cmd.Process.Pid
 		item.Status = int(APP_STATUS_RUNNING)
 		item.StartTime = time.Now().Unix()
@@ -737,8 +783,10 @@ func handleAppInstall(ctl *taskCmd) {
 		item.Cmd = int(APP_CMD_STOP)
 		item.Enable = 1
 		item.Status = int(APP_STATUS_INSTALL)
-		item.CPUThreshold = gCPUThreshold
-		item.MemThreshold = gMemThreshold
+		item.CPUThreshold = defCPUThreshold
+		item.MemThreshold = defMemThreshold
+		item.CPULimit = defCPULimit
+		item.MemLimit = defMemLimit
 		item.LogStartTime = time.Now().Unix()
 		item.LogEndTime = time.Now().Unix()
 		item.Version = getAppVersion(appName)
@@ -942,9 +990,11 @@ func handleAppList(ctl *taskCmd) {
 			item.Name = "srv" + strconv.Itoa(k)
 			item.Enable = int8(v.Enable)
 			item.Status = int8(v.Status)
-			item.CpuThreshold = gCPUThreshold
-			item.CpuUsage = v.CPURate
-			item.MemThreshold = gMemThreshold
+			item.CPUThreshold = v.CPUThreshold
+			item.CPULimit = v.CPULimit
+			item.CPUUsage = v.CPURate
+			item.MemThreshold = v.MemThreshold
+			item.MemLimit = v.MemLimit
 			item.MemUsage = v.MemRate
 			item.StartTime = v.StartTime
 			item.LogsStartTime = 0
@@ -988,9 +1038,11 @@ func handleAppList(ctl *taskCmd) {
 			item.Name = "srv" + strconv.Itoa(k)
 			item.Enable = int8(v.Enable)
 			item.Status = int8(v.Status)
-			item.CpuThreshold = gCPUThreshold
-			item.CpuUsage = v.CPURate
-			item.MemThreshold = gMemThreshold
+			item.CPUThreshold = v.CPUThreshold
+			item.CPULimit = v.CPULimit
+			item.CPUUsage = v.CPURate
+			item.MemThreshold = v.MemThreshold
+			item.MemLimit = v.MemLimit
 			item.MemUsage = v.MemRate
 			item.StartTime = v.StartTime
 			if ctl.req.Log == 1 {
@@ -1032,30 +1084,120 @@ func handleAppVersion(ctl *taskCmd) {
 	}
 }
 
-func handleAppConfigCPU(ctl *taskCmd) {
-	gCPUThreshold = ctl.req.Value
-	log.Println("handleAppConfigCPU: ", ctl.req.Value)
-	writeAppInfoFile()
-	writeCtlSimpleRsp(ctl, 0, "Success.")
+func handleAppConfigCPUThreshold(ctl *taskCmd) {
+	log.Printf("handleAppConfigCPUThreshold: %s -> %d\n", ctl.req.Name, ctl.req.Value)
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		item.CPUThreshold = ctl.req.Value
+		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
+		writeCtlSimpleRsp(ctl, 0, "Success.")
+		writeAppEventLog(item, "config %s cpu threshold success.", item.Name)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppConfigCPUThreshold findAppItem nil")
+	}
 }
 
-func handleAppConfigMem(ctl *taskCmd) {
-	gMemThreshold = ctl.req.Value
-	log.Println("handleAppConfigMem: ", ctl.req.Value)
-	writeAppInfoFile()
-	writeCtlSimpleRsp(ctl, 0, "Success.")
+func handleAppConfigMemThreshold(ctl *taskCmd) {
+	log.Printf("handleAppConfigMemThreshold: %s -> %d\n", ctl.req.Name, ctl.req.Value)
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		item.MemThreshold = ctl.req.Value
+		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
+		writeCtlSimpleRsp(ctl, 0, "Success.")
+		writeAppEventLog(item, "config %s memory threshold success.", item.Name)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppConfigMemThreshold findAppItem nil")
+	}
 }
 
-func handleAppQueryCPU(ctl *taskCmd) {
-	ret := strconv.Itoa(gCPUThreshold)
-	log.Println("handleAppQueryCPU: ", ret)
-	writeCtlSimpleRsp(ctl, 0, ret)
+func handleAppQueryCPUThreshold(ctl *taskCmd) {
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		ret := strconv.Itoa(item.CPUThreshold)
+		writeCtlSimpleRsp(ctl, 0, ret)
+		log.Printf("handleAppQueryCPUThreshold: %s -> %s", ctl.req.Name, ret)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppQueryCPUThreshold findAppItem nil")
+	}
 }
 
-func handleAppQueryMem(ctl *taskCmd) {
-	ret := strconv.Itoa(gMemThreshold)
-	log.Println("handleAppQueryMem: ", ret)
-	writeCtlSimpleRsp(ctl, 0, ret)
+func handleAppQueryMemThreshold(ctl *taskCmd) {
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		ret := strconv.Itoa(item.MemThreshold)
+		writeCtlSimpleRsp(ctl, 0, ret)
+		log.Printf("handleAppQueryMemThreshold: %s -> %s", ctl.req.Name, ret)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppQueryMemThreshold findAppItem nil")
+	}
+}
+
+func handleAppConfigCPULimit(ctl *taskCmd) {
+	log.Printf("handleAppConfigCPULimit: %s -> %d\n", ctl.req.Name, ctl.req.Value)
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		item.CPULimit = ctl.req.Value
+		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
+		writeCtlSimpleRsp(ctl, 0, "Success.")
+		writeAppEventLog(item, "config %s cpu limit success.", item.Name)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppConfigCPULimit findAppItem nil")
+	}
+}
+
+func handleAppConfigMemLimit(ctl *taskCmd) {
+	log.Printf("handleAppConfigMemLimit: %s -> %d\n", ctl.req.Name, ctl.req.Value)
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		item.MemLimit = ctl.req.Value
+		item.LogEndTime = time.Now().Unix()
+		writeAppInfoFile()
+		writeCtlSimpleRsp(ctl, 0, "Success.")
+		writeAppEventLog(item, "config %s memory limit success.", item.Name)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppConfigMemLimit findAppItem nil")
+	}
+}
+
+func handleAppQueryCPULimit(ctl *taskCmd) {
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		ret := strconv.Itoa(item.CPULimit)
+		writeCtlSimpleRsp(ctl, 0, ret)
+		log.Printf("handleAppQueryCPULimit: %s -> %s", ctl.req.Name, ret)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppQueryCPULimit findAppItem nil")
+	}
+}
+
+func handleAppQueryMemLimit(ctl *taskCmd) {
+	var item *taskItem
+	item = findAppItem(ctl.req.Name)
+	if item != nil {
+		ret := strconv.Itoa(item.MemLimit)
+		writeCtlSimpleRsp(ctl, 0, ret)
+		log.Printf("handleAppQueryMemLimit: %s -> %s", ctl.req.Name, ret)
+	} else {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppQueryMemLimit findAppItem nil")
+	}
 }
 
 func handleAppLogs(ctl *taskCmd) {
@@ -1068,6 +1210,28 @@ func handleAppLogs(ctl *taskCmd) {
 	}
 
 	writeCtlSimpleRsp(ctl, 0, ret)
+}
+
+func handleAppQueryAllResource(ctl *taskCmd) {
+	log.Println("handleAppQueryAllResource:")
+
+	lst := appResourceList{}
+	for k, v := range gTaskList {
+		_ = k
+		res := appResource{}
+		res.Name = v.Name
+		res.CPUThreshold = v.CPUThreshold
+		res.MemThreshold = v.MemThreshold
+		lst.Items = append(lst.Items, res)
+	}
+
+	data, err := json.Marshal(&lst)
+	if err != nil {
+		writeCtlSimpleRsp(ctl, 1, "Operation failed.")
+		log.Println("handleAppQueryAllResource marshal error:", err)
+		return
+	}
+	writeCtlSimpleRsp(ctl, 0, string(data))
 }
 
 func writeCtlSimpleRsp(ctl *taskCmd, code int16, ret string) {
