@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -40,17 +41,18 @@ w816+kr+DSkA68HXk3Wl/C0GD+smA68ZSdL5K8OGQf81
 `
 
 const help string = `
-appSignTool version2.0.0, command parameter:
+appSignTool version2.0.1, command parameter:
 
 appSingTool -f folder -b app-name -l lib -v SV01.001 -o package name
 -f: app program directory
 -b: app execute program name
 -l: app program dependency library
+-e: extended directory, multiple groups
 -v: default value SV01.001
 -o: output app package name
 
 example:
-appSignTool -f /usr/local/app -b hello -l /usr/local/app/lib -v SV01.001 -o app
+appSignTool -f /usr/local/app -b hello -l /usr/local/app/lib -e /usr/local/app/data -v SV01.001 -o app
 `
 const defAppVersion string = "SV01.001"
 const defAppVersionFile string = "version.cfg"
@@ -65,14 +67,29 @@ type appCfg struct {
 	LibPath string `json:"libpath"`
 }
 
+type StringArray []string
+
+func (s *StringArray) String() string {
+	return fmt.Sprint([]string(*s))
+}
+
+func (s *StringArray) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 func main() {
 	defDir := getCurrentPath()
-	fn := flag.String("f", "", "app program absolute path")
-	bin := flag.String("b", "", "app execute program name")
-	lib := flag.String("l", "", "app program dependency library")
-	ver := flag.String("v", "SV01.001", "app version")
-	out := flag.String("o", "", "output file")
-	flag.Parse()
+
+	flagSet := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fn := flagSet.String("f", "", "app program absolute path")
+	bin := flagSet.String("b", "", "app execute program name")
+	lib := flagSet.String("l", "", "app program dependency library")
+	ext := StringArray{}
+	flagSet.Var(&ext, "e", "e")
+	ver := flagSet.String("v", "SV01.001", "app version")
+	out := flagSet.String("o", "", "output file")
+	flagSet.Parse(os.Args[1:])
 
 	if len(*fn) < 1 || len(*bin) < 1 {
 		fmt.Println(help)
@@ -107,6 +124,15 @@ func main() {
 			return
 		}
 	}
+	if len(ext) > 0 {
+		for k, v := range ext {
+			fmt.Println(k, ":", v, ",", path.Base(v))
+			err = os.MkdirAll(gAppPackagePath+"/"+path.Base(v), 0755)
+			if err != nil {
+				fmt.Println("make ext dir err: ", err)
+			}
+		}
+	}
 
 	defer os.RemoveAll(parentPath)
 
@@ -131,6 +157,16 @@ func main() {
 		}
 	}
 
+	if len(ext) > 0 {
+		for _, v := range ext {
+			extPath := filepath.Join(gAppPackagePath, path.Base(v))
+			err = copyDir(v, extPath)
+			if err != nil {
+				fmt.Println("copy ext directory file error: ", err)
+			}
+		}
+	}
+
 	err = genVersionFile(*ver)
 	if err != nil {
 		return
@@ -148,7 +184,7 @@ func main() {
 	}
 
 	cmd := fmt.Sprintf("cd %s && tar -zcvf %s.tar %s/", parentPath, filepath.Join(defDir, *out), appName)
-	fmt.Println(cmd)
+	//fmt.Println(cmd)
 	execBashCmd(cmd)
 }
 
@@ -337,7 +373,8 @@ func copyDir(srcPath, destPath string) error {
 		}
 		if !f.IsDir() {
 			path := strings.Replace(path, "\\", "/", -1)
-			destNewPath := strings.Replace(path, srcPath, destPath, -1)
+			//fmt.Println("path: ", path, ", srcPath: ", filepath.Join(srcPath), ", dstPath: ", destPath)
+			destNewPath := strings.Replace(path, filepath.Join(srcPath), destPath, -1)
 			fmt.Println("copy file:" + path + " to " + destNewPath)
 			copyFile(path, destNewPath)
 		}
