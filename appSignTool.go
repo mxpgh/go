@@ -43,7 +43,7 @@ w816+kr+DSkA68HXk3Wl/C0GD+smA68ZSdL5K8OGQf81
 const help string = `
 appSignTool version2.0.1, command parameter:
 
-appSingTool -f folder -b app-name -l lib -v SV01.001 -o package name
+appSingTool -f folder -b app-name -l lib -e directory -v SV01.001 -o package name
 -f: app program directory
 -b: app execute program name
 -l: app program dependency library
