@@ -39,7 +39,7 @@ func StartHTTPServer() {
 		// 接收退出信号
 		<-quit
 		if err := server.Close(); err != nil {
-			log.Println("Close server:", err)
+			log.Println("| hfs::StartHTTPServerClose server:", err)
 		}
 	}()
 
@@ -50,13 +50,13 @@ func StartHTTPServer() {
 	http.HandleFunc("/upload", uploadFileHandler)
 	http.HandleFunc("/upload/", uploadFileHandler)
 	//http.HandleFunc("/download/", downloadFileHandler)
-	log.Println("download:", downfolderPath, ", upload:", upfolderPath)
+	log.Println("| hfs::StartHTTPServer download:", downfolderPath, ", upload:", upfolderPath)
 	fs := http.FileServer(http.Dir(downfolderPath))
 	http.Handle("/download/", http.StripPrefix("/download", fs))
-	log.Print("HTTP File Server Started Listen Port:8080, use /upload/ for uploading files and /download/{fileName} for downloading")
+	log.Print("| hfs::StartHTTPServer Started Listen Port:8080, use /upload/ for uploading files and /download/{fileName} for downloading")
 	err := server.ListenAndServe()
 	if err != nil {
-		log.Println("http server error: ", err)
+		log.Println("| hfs::StartHTTPServer http server error: ", err)
 	}
 }
 
@@ -64,7 +64,7 @@ func StartHTTPServer() {
 func StopHTTPServer() {
 	err := server.Shutdown(nil)
 	if err != nil {
-		log.Println("shutdown the server err: ", err)
+		log.Println("| hfs::StopHTTPServer shutdown the server err: ", err)
 	}
 }
 
@@ -79,7 +79,7 @@ func main() {
 	http.HandleFunc("/upload/", uploadFileHandler)
 	http.HandleFunc("/upload", uploadFileHandler)
 	//http.HandleFunc("/download/", downloadFileHandler)
-	fmt.Println("download:", downfolderPath, ", upload:", upfolderPath)
+	fmt.Println("| hfs: download:", downfolderPath, ", upload:", upfolderPath)
 	fs := http.FileServer(http.Dir(downfolderPath))
 	http.Handle("/download/", http.StripPrefix("/download", fs))
 
@@ -117,7 +117,7 @@ func downloadFileHandler(w http.ResponseWriter, r *http.Request) {
 
 func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		log.Printf("uploadFileHandler: Could not parse multipart form: %v\n", err)
+		log.Printf("| hfs::uploadFileHandler: Could not parse multipart form: %v\n", err)
 		renderError(w, "CANT_PARSE_FORM\n", http.StatusInternalServerError)
 		return
 	}
@@ -127,7 +127,7 @@ func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
 	devSN := r.FormValue("devSn")
 	contName := r.FormValue("containerName")
 	appName := r.FormValue("appName")
-	log.Printf("uploadFileHandler: md5=%s, oldFileName=%s, devSN=%s", md5, oldFileName, devSN)
+	log.Printf("| hfs::uploadFileHandler: md5=%s, oldFileName=%s, devSN=%s", md5, oldFileName, devSN)
 	if len(contName) > 0 {
 		log.Printf("，containerName=%s", contName)
 	}
@@ -140,23 +140,23 @@ func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		renderError(w, "INVALID_FILE\n", http.StatusBadRequest)
-		log.Printf("uploadFileHandler: File(%s) INVALID_FILE\n", oldFileName)
+		log.Printf("| hfs: uploadFileHandler: File(%s) INVALID_FILE\n", oldFileName)
 		return
 	}
 	defer file.Close()
 	// Get and print out file size
 	fileSize := fileHeader.Size
-	log.Printf("uploadFileHandler: File(%s) size (bytes): %v\n", fileHeader.Filename, fileSize)
+	log.Printf("| hfs::uploadFileHandler: File(%s) size (bytes): %v\n", fileHeader.Filename, fileSize)
 	// validate file size
 	if fileSize > maxUploadSize {
 		renderError(w, "FILE_TOO_BIG\n", http.StatusBadRequest)
-		log.Printf("uploadFileHandler: File(%s) FILE_TOO_BIG\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) FILE_TOO_BIG\n", fileHeader.Filename)
 		return
 	}
 	fileBytes, err := ioutil.ReadAll(file)
 	if err != nil {
 		renderError(w, "READ INVALID_FILE\n", http.StatusBadRequest)
-		log.Printf("uploadFileHandler: File(%s) READ INVALID_FILE\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) READ INVALID_FILE\n", fileHeader.Filename)
 		return
 	}
 
@@ -172,7 +172,7 @@ func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		renderError(w, "INVALID_FILE_TYPE\n", http.StatusBadRequest)
-		log.Printf("uploadFileHandler: File(%s) INVALID_FILE_TYPE\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) INVALID_FILE_TYPE\n", fileHeader.Filename)
 		return
 	}
 
@@ -180,7 +180,7 @@ func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
 	fileEndings, err := mime.ExtensionsByType(detectedFileType)
 	if err != nil {
 		renderError(w, "CANT_READ_FILE_TYPE\n", http.StatusInternalServerError)
-		log.Printf("uploadFileHandler: File(%s) CANT_READ_FILE_TYPE\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) CANT_READ_FILE_TYPE\n", fileHeader.Filename)
 		return
 	}
 
@@ -193,25 +193,25 @@ func uploadFileHandler(w http.ResponseWriter, r *http.Request) {
 		upFilePath = filepath.Join(upFilePath, contName)
 	}
 	newPath := filepath.Join(upFilePath, oldFileName)
-	log.Printf("uploadFileHandler: FileType: %s, File: %s\n", detectedFileType, newPath)
+	log.Printf("| hfs::uploadFileHandler: FileType: %s, File: %s\n", detectedFileType, newPath)
 
 	// write file
 	err = os.MkdirAll(upFilePath, os.ModePerm)
 	if err != nil {
 		renderError(w, "CANT_CREATE_FOLDER\n", http.StatusInternalServerError)
-		log.Printf("uploadFileHandler: File(%s) CANT_CREATE_FOLDER\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) CANT_CREATE_FOLDER\n", fileHeader.Filename)
 		return
 	}
 	newFile, err := os.Create(newPath)
 	if err != nil {
 		renderError(w, "CANT_WRITE_FILE\n", http.StatusInternalServerError)
-		log.Printf("uploadFileHandler: File(%s) CANT_WRITE_FILE\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) CANT_WRITE_FILE\n", fileHeader.Filename)
 		return
 	}
 	defer newFile.Close() // idempotent, okay to call twice
 	if _, err := newFile.Write(fileBytes); err != nil || newFile.Close() != nil {
 		renderError(w, "CANT_WRITE_FILE\n", http.StatusInternalServerError)
-		log.Printf("uploadFileHandler: File(%s) CANT_WRITE_FILE\n", fileHeader.Filename)
+		log.Printf("| hfs::uploadFileHandler: File(%s) CANT_WRITE_FILE\n", fileHeader.Filename)
 		return
 	}
 
@@ -247,3 +247,7 @@ func getCurrentPath() string {
 	}
 	return string(path[0 : i+1])
 }
+
+//
+//go build -ldflags "-w -s" -buildmode=c-shared -o hfs.dll HttpFileServer.go
+//
